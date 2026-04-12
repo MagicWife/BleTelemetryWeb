@@ -1,3 +1,5 @@
+online web: https://zhanghengee.github.io/BleTelemetryWeb/
+
 # BLE Telemetry Aircraft HUD
 
 一个基于浏览器的 BLE 遥测监控静态网页，支持：
@@ -79,3 +81,6 @@
 
 ```bash
 python -m http.server 8000
+
+
+online web: https://zhanghengee.github.io/BleTelemetryWeb/
