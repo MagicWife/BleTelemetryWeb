@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BLE Telemetry Professional Dashboard</title>
+  <title>BLE Telemetry Aircraft HUD</title>
   <meta name="color-scheme" content="dark" />
   <link
     rel="stylesheet"
@@ -23,7 +23,7 @@
           <div class="brand-icon">BLE</div>
           <div class="brand-text">
             <h1>Telemetry Console</h1>
-            <p>Professional Browser BLE Dashboard</p>
+            <p>3D Aircraft Attitude / Professional Browser BLE Dashboard</p>
           </div>
         </div>
 
@@ -93,9 +93,18 @@
           </div>
         </div>
 
-        <div class="section-title">三维姿态</div>
-        <div class="canvas-card">
-          <canvas id="attitudeCanvas"></canvas>
+        <div class="section-title">3D 飞机姿态 HUD</div>
+        <div class="canvas-card hud-card">
+          <div class="hud-overlay">
+            <div class="hud-title">AIRCRAFT ATTITUDE</div>
+            <div class="hud-sub">Three.js / Smooth Quaternion / Real-time Telemetry</div>
+          </div>
+          <div id="aircraft3d"></div>
+          <div class="hud-bottom">
+            <div class="hud-metric"><span>ROLL</span><b id="hudRoll">0.0°</b></div>
+            <div class="hud-metric"><span>PITCH</span><b id="hudPitch">0.0°</b></div>
+            <div class="hud-metric"><span>YAW</span><b id="hudYaw">0.0°</b></div>
+          </div>
         </div>
 
         <div class="section-title">最近帧</div>
@@ -103,7 +112,7 @@
 
         <div class="section-title">使用提示</div>
         <div class="tip-box">
-          推荐使用 Chrome / Edge。地图在本地 file:// 方式打开时，部分 OpenStreetMap 瓦片可能因缺少 Referer 被拦截；部署到 GitHub Pages 这类 HTTPS 页面通常更正常。
+          这版已改为非 module 方式加载 Three.js。若“连接蓝牙”仍无反应，请打开浏览器开发者工具查看 Console，或确认使用的是 Chrome / Edge 且页面在 HTTPS 环境。
         </div>
       </div>
     </section>
@@ -127,6 +136,7 @@
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
     crossorigin=""
   ></script>
+  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

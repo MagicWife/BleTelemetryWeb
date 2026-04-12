@@ -27,6 +27,10 @@ const dom = {
   coordMode: document.getElementById("coordMode"),
   frames: document.getElementById("frames"),
   tcycleInput: document.getElementById("tcycleInput"),
+  hudRoll: document.getElementById("hudRoll"),
+  hudPitch: document.getElementById("hudPitch"),
+  hudYaw: document.getElementById("hudYaw"),
+  aircraft3d: document.getElementById("aircraft3d"),
   tele: {
     mac: document.getElementById("tele-mac"),
     time: document.getElementById("tele-time"),
@@ -44,7 +48,6 @@ const dom = {
   v1Bar: document.getElementById("v1Bar"),
   v5Bar: document.getElementById("v5Bar"),
   v6Bar: document.getElementById("v6Bar"),
-  canvas: document.getElementById("attitudeCanvas"),
 };
 
 document.getElementById("btnConnect").addEventListener("click", connectBle);
@@ -182,7 +185,7 @@ function onFrame(payloadCsv) {
 
   renderTelemetry(tele);
   updateVoltageBars(tele);
-  drawAttitude(tele);
+  updateAircraftAttitude(tele);
   updateMapFromTele(tele);
   renderFrames();
 }
@@ -234,6 +237,9 @@ function renderTelemetry(tele) {
   dom.tele.yaw.textContent = `${tele.yaw}°`;
   dom.tele.acc.textContent = `${tele.ax} / ${tele.ay} / ${tele.az}`;
   dom.tele.gyro.textContent = `${tele.gx} / ${tele.gy} / ${tele.gz}`;
+  dom.hudRoll.textContent = `${Number(tele.roll).toFixed(1)}°`;
+  dom.hudPitch.textContent = `${Number(tele.pitch).toFixed(1)}°`;
+  dom.hudYaw.textContent = `${Number(tele.yaw).toFixed(1)}°`;
 }
 
 function updateVoltageBars(tele) {
@@ -405,146 +411,222 @@ function updateMapFromTele(tele) {
   map.setView([mLat, mLon], Math.max(map.getZoom(), 15), { animate: true });
 }
 
-// ===== 3D Attitude =====
-const attitude = {
-  ctx: dom.canvas.getContext("2d"),
-  dpr: Math.max(1, window.devicePixelRatio || 1),
-};
+// ===== Three.js aircraft =====
+function createAircraftHUD(container) {
+  if (!window.THREE) {
+    console.error("THREE not loaded");
+    return { setAttitude: () => {}, setSize: () => {} };
+  }
+  const THREE = window.THREE;
 
-function resizeCanvas() {
-  const rect = dom.canvas.getBoundingClientRect();
-  const width = Math.max(320, Math.floor(rect.width * attitude.dpr));
-  const height = Math.max(240, Math.floor(rect.height * attitude.dpr));
-  dom.canvas.width = width;
-  dom.canvas.height = height;
-  drawAttitude(latestTele || { roll: "0", pitch: "0", yaw: "0" });
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0x081220, 12, 30);
+
+const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100);
+
+// ✔ 相机完全对准中心
+camera.position.set(0, 0, 10);
+camera.lookAt(0, 0, 0);
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setClearColor(0x000000, 0);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  container.appendChild(renderer.domElement);
+
+  const root = new THREE.Group();
+  root.position.set(0, -0.1, 0);
+  scene.add(root);
+
+  const ambient = new THREE.AmbientLight(0xa9c7ff, 0.95);
+  scene.add(ambient);
+
+  const dir1 = new THREE.DirectionalLight(0xa0c8ff, 1.8);
+  dir1.position.set(5, 7, 7);
+  scene.add(dir1);
+
+  const dir2 = new THREE.DirectionalLight(0x49ffc8, 0.55);
+  dir2.position.set(-4, -1, -3);
+  scene.add(dir2);
+
+  const hemi = new THREE.HemisphereLight(0x4a84ff, 0x08111f, 0.75);
+  scene.add(hemi);
+
+  const ringMat = new THREE.LineBasicMaterial({ color: 0x3f6ecb, transparent: true, opacity: 0.26 });
+  for (let i = 0; i < 4; i++) {
+    const radius = 2.2 + i * 1.0;
+    const curve = new THREE.EllipseCurve(0, 0, radius, radius, 0, Math.PI * 2, false, 0);
+    const points = curve.getPoints(120).map(p => new THREE.Vector3(p.x, -1.55, p.y));
+    const g = new THREE.BufferGeometry().setFromPoints(points);
+    const line = new THREE.LineLoop(g, ringMat);
+    line.rotation.x = Math.PI / 2;
+    root.add(line);
+  }
+
+  const grid = new THREE.GridHelper(14, 14, 0x2e4e89, 0x1b2c49);
+  grid.position.y = -2.2;
+  grid.material.transparent = true;
+  grid.material.opacity = 0.24;
+  root.add(grid);
+
+  const skySphere = new THREE.Mesh(
+    new THREE.SphereGeometry(28, 32, 24),
+    new THREE.MeshBasicMaterial({ color: 0x0b1730, side: THREE.BackSide })
+  );
+  scene.add(skySphere);
+
+  const aircraftPivot = new THREE.Group();
+  aircraftPivot.position.set(-1.60, 1.50, 0);
+  root.add(aircraftPivot);
+
+  const aircraft = new THREE.Group();
+  aircraftPivot.add(aircraft);
+  aircraft.scale.set(0.66, 0.66, 0.66);
+
+  const bodyMat = new THREE.MeshPhysicalMaterial({
+    color: 0xe6efff,
+    metalness: 0.42,
+    roughness: 0.28,
+    clearcoat: 0.65,
+    clearcoatRoughness: 0.26,
+    emissive: 0x081421
+  });
+  const accentMat = new THREE.MeshStandardMaterial({
+    color: 0x57a0ff,
+    metalness: 0.58,
+    roughness: 0.28,
+    emissive: 0x12304f
+  });
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color: 0x7dd9ff,
+    metalness: 0.04,
+    roughness: 0.08,
+    transmission: 0.86,
+    transparent: true,
+    opacity: 0.84
+  });
+
+  const fuselage = new THREE.Mesh(new THREE.CapsuleGeometry(0.24, 2.5, 8, 18), bodyMat);
+  fuselage.rotation.z = Math.PI / 2;
+  aircraft.add(fuselage);
+
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.72, 24), accentMat);
+  nose.rotation.z = -Math.PI / 2;
+  nose.position.x = 1.65;
+  aircraft.add(nose);
+
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.48, 20), bodyMat);
+  tail.rotation.z = Math.PI / 2;
+  tail.position.x = -1.6;
+  aircraft.add(tail);
+
+  const cockpit = new THREE.Mesh(new THREE.SphereGeometry(0.2, 20, 20), glassMat);
+  cockpit.scale.set(1.42, 0.86, 0.82);
+  cockpit.position.set(0.58, 0.16, 0);
+  aircraft.add(cockpit);
+
+  const wing = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.05, 3.2), accentMat);
+  wing.position.set(0.0, 0, 0);
+  aircraft.add(wing);
+
+  const wingTipL = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.03, 0.18), bodyMat);
+  wingTipL.position.set(0.08, 0.03, 1.66);
+  aircraft.add(wingTipL);
+  const wingTipR = wingTipL.clone();
+  wingTipR.position.z = -1.66;
+  aircraft.add(wingTipR);
+
+  const tailWing = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.05, 1.26), bodyMat);
+  tailWing.position.set(-1.28, 0.1, 0);
+  aircraft.add(tailWing);
+
+  const fin = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.64, 0.07), accentMat);
+  fin.position.set(-1.34, 0.42, 0);
+  fin.rotation.z = 0.12;
+  aircraft.add(fin);
+
+  const engineL = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.11, 0.54, 18), bodyMat);
+  engineL.rotation.z = Math.PI / 2;
+  engineL.position.set(0.0, -0.14, 0.78);
+  aircraft.add(engineL);
+  const engineR = engineL.clone();
+  engineR.position.z = -0.78;
+  aircraft.add(engineR);
+
+  const engineGlowMat = new THREE.MeshBasicMaterial({ color: 0x56c7ff, transparent: true, opacity: 0.62 });
+  const glowL = new THREE.Mesh(new THREE.SphereGeometry(0.08, 16, 16), engineGlowMat);
+  glowL.position.set(-0.24, -0.14, 0.78);
+  aircraft.add(glowL);
+  const glowR = glowL.clone();
+  glowR.position.z = -0.78;
+  aircraft.add(glowR);
+
+  const trailMat = new THREE.LineBasicMaterial({ color: 0x5ba0ff, transparent: true, opacity: 0.18 });
+  const pathPoints = [];
+  for (let i = 0; i < 70; i++) pathPoints.push(new THREE.Vector3(-i * 0.055, 0, 0));
+  const trailGeo = new THREE.BufferGeometry().setFromPoints(pathPoints);
+  const trail = new THREE.Line(trailGeo, trailMat);
+  trail.position.set(-1.2, 0, 0);
+  aircraft.add(trail);
+
+  const targetQuat = new THREE.Quaternion();
+  const currentQuat = new THREE.Quaternion();
+
+  function setSize() {
+    const w = Math.max(320, container.clientWidth);
+    const h = Math.max(240, container.clientHeight);
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+  setSize();
+  window.addEventListener('resize', setSize);
+
+  function setAttitude(rollDeg, pitchDeg, yawDeg) {
+    const euler = new THREE.Euler(
+      THREE.MathUtils.degToRad(-pitchDeg),
+      THREE.MathUtils.degToRad(-yawDeg),
+      THREE.MathUtils.degToRad(-rollDeg),
+      'YXZ'
+    );
+    targetQuat.setFromEuler(euler);
+  }
+
+  const clock = new THREE.Clock();
+  function animate() {
+    requestAnimationFrame(animate);
+    const t = clock.getElapsedTime();
+
+    currentQuat.slerp(targetQuat, 0.14);
+    aircraftPivot.quaternion.copy(currentQuat);
+
+    glowL.material.opacity = 0.48 + 0.16 * Math.sin(t * 3.2);
+    glowR.material.opacity = 0.48 + 0.16 * Math.sin(t * 3.2 + 1.2);
+
+    aircraft.rotation.y = 0.06 * Math.sin(t * 0.9);
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  return { setAttitude };
 }
-window.addEventListener("resize", resizeCanvas);
 
-function drawAttitude(tele) {
-  const ctx = attitude.ctx;
-  const w = dom.canvas.width;
-  const h = dom.canvas.height;
-  ctx.clearRect(0, 0, w, h);
+const aircraftView = createAircraftHUD(dom.aircraft3d);
 
-  const step = Math.max(34, Math.floor(Math.min(w, h) / 9));
-  ctx.strokeStyle = "rgba(255,255,255,.08)";
-  ctx.lineWidth = 1;
-  for (let x = step; x < w; x += step) {
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
-  }
-  for (let y = step; y < h; y += step) {
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-  }
-
+function updateAircraftAttitude(tele) {
   const roll = parseFloat(tele.roll) || 0;
   const pitch = parseFloat(tele.pitch) || 0;
   const yaw = parseFloat(tele.yaw) || 0;
-  const R = roll * Math.PI / 180;
-  const P = pitch * Math.PI / 180;
-  const Y = yaw * Math.PI / 180;
+  if (aircraftView && aircraftView.setAttitude) aircraftView.setAttitude(roll, pitch, yaw);
+}
 
-  const s = Math.min(w, h) * 0.16;
-  const cx = w * 0.50;
-  const cy = h * 0.58;
+window.addEventListener("error", (e) => {
+  console.error("Page error:", e.error || e.message);
+});
 
-  const V = [
-    [-1,-1,-1],[ 1,-1,-1],[ 1, 1,-1],[-1, 1,-1],
-    [-1,-1, 1],[ 1,-1, 1],[ 1, 1, 1],[-1, 1, 1],
-  ].map(p => [p[0]*s, p[1]*s, p[2]*s]);
-
-  const rot = ([x,y,z]) => {
-    const x1 = x*Math.cos(Y) - y*Math.sin(Y);
-    const y1 = x*Math.sin(Y) + y*Math.cos(Y);
-    const z1 = z;
-
-    const x2 = x1*Math.cos(P) + z1*Math.sin(P);
-    const y2 = y1;
-    const z2 = -x1*Math.sin(P) + z1*Math.cos(P);
-
-    const x3 = x2;
-    const y3 = y2*Math.cos(R) - z2*Math.sin(R);
-    const z3 = y2*Math.sin(R) + z2*Math.cos(R);
-    return [x3,y3,z3];
-  };
-
-  const dist = Math.max(w,h) * 0.95;
-  const proj = ([x,y,z]) => {
-    const k = dist / (dist + z + s*2.0);
-    return [cx + x*k, cy + y*k, z];
-  };
-
-  const Vr = V.map(rot);
-  const P2 = Vr.map(proj);
-  const faces = [[0,1,2,3],[4,5,6,7],[0,1,5,4],[2,3,7,6],[1,2,6,5],[0,3,7,4]];
-
-  const sub = (a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
-  const cross = (a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
-  const norm = a => { const n = Math.hypot(a[0],a[1],a[2]) || 1; return [a[0]/n,a[1]/n,a[2]/n]; };
-  const dot = (a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
-  const light = norm([0.55,-0.35,0.82]);
-
-  const faceInfo = faces.map(idx => {
-    const a = Vr[idx[0]], b = Vr[idx[1]], c = Vr[idx[2]];
-    const n = norm(cross(sub(b,a), sub(c,a)));
-    const inten = Math.max(0, dot(n, light));
-    const zavg = idx.reduce((sum,i)=>sum + Vr[i][2], 0) / idx.length;
-    return { idx, inten, zavg };
-  }).sort((A,B)=>A.zavg - B.zavg);
-
-  for (const f of faceInfo) {
-    const pts = f.idx.map(i => P2[i]);
-    const alpha = 0.08 + f.inten * 0.24;
-    ctx.beginPath();
-    ctx.moveTo(pts[0][0], pts[0][1]);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-    ctx.closePath();
-    ctx.fillStyle = `rgba(106,169,255,${alpha.toFixed(3)})`;
-    ctx.strokeStyle = "rgba(255,255,255,.25)";
-    ctx.lineWidth = Math.max(2, w / 500);
-    ctx.fill();
-    ctx.stroke();
-  }
-
-  const edges = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
-  ctx.strokeStyle = "rgba(255,255,255,.55)";
-  ctx.lineWidth = Math.max(2.2, w / 420);
-  for (const [a,b] of edges) {
-    ctx.beginPath();
-    ctx.moveTo(P2[a][0], P2[a][1]);
-    ctx.lineTo(P2[b][0], P2[b][1]);
-    ctx.stroke();
-  }
-
-  const axisLen = s * 1.7;
-  drawAxis([axisLen,0,0], "X", "rgba(106,169,255,.95)");
-  drawAxis([0,axisLen,0], "Y", "rgba(55,210,159,.95)");
-  drawAxis([0,0,axisLen], "Z", "rgba(255,190,92,.95)");
-
-  function drawAxis(v, label, color) {
-    const O = proj(rot([0,0,0]));
-    const T = proj(rot(v));
-    ctx.beginPath();
-    ctx.moveTo(O[0], O[1]);
-    ctx.lineTo(T[0], T[1]);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = Math.max(2.4, w / 360);
-    ctx.stroke();
-    ctx.fillStyle = color;
-    ctx.font = `${Math.max(14, w / 48)}px Inter, sans-serif`;
-    ctx.fillText(label, T[0] + 8, T[1] + 4);
-  }
-
-  ctx.fillStyle = "rgba(237,244,255,.96)";
-  ctx.font = `${Math.max(20, w / 34)}px Inter, sans-serif`;
-  ctx.fillText("3D Attitude", 20 * attitude.dpr, 34 * attitude.dpr);
-
-  ctx.fillStyle = "rgba(158,178,206,.95)";
-  ctx.font = `${Math.max(13, w / 56)}px Inter, sans-serif`;
-  ctx.fillText(`Roll ${roll.toFixed(1)}°   Pitch ${pitch.toFixed(1)}°   Yaw ${yaw.toFixed(1)}°`, 20 * attitude.dpr, 58 * attitude.dpr);
+if (!navigator.bluetooth) {
+  console.warn("Web Bluetooth unavailable in this environment.");
 }
 
 renderFrames();
-resizeCanvas();
 setState("warn", "未连接");
 dom.notifyState.textContent = "off";
