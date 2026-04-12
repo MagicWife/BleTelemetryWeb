@@ -613,7 +613,7 @@ camera.lookAt(0, 0, 0);
 const aircraftView = createAircraftHUD(dom.aircraft3d);
 
 function updateAircraftAttitude(tele) {
-  const roll = parseFloat(tele.roll) || 0;
+  const roll = -(parseFloat(tele.roll) || 0);
   const pitch = parseFloat(tele.pitch) || 0;
   const yaw = parseFloat(tele.yaw) || 0;
   if (aircraftView && aircraftView.setAttitude) aircraftView.setAttitude(roll, pitch, yaw);
