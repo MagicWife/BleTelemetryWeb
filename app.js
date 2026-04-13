@@ -329,10 +329,11 @@ let mapMarker = null;
 
 function initMap() {
   map = L.map("map", { zoomControl: true, attributionControl: true }).setView([22.3193, 114.1694], 9);
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", {
     maxZoom: 19,
     attribution: "&copy; OpenStreetMap contributors"
   }).addTo(map);
+  L.control.scale().addTo(map);
 }
 initMap();
 
