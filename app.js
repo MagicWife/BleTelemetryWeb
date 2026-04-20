@@ -280,7 +280,7 @@ async function sendTcycle() {
   }
   let ms = parseInt(dom.tcycleInput.value || "500", 10);
   if (!Number.isFinite(ms) || ms <= 0) ms = 500;
-  ms = Math.max(10, Math.min(10000, ms));
+  ms = Math.max(1, Math.min(10000, ms));
   const cmd = `$AT+Tcycle=${ms}*\r\n`;
   const data = new TextEncoder().encode(cmd);
 
