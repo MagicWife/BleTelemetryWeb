@@ -212,7 +212,7 @@ function parseTelemetry(csv) {
   };
   const f3 = x => {
     const v = parseFloat(x);
-    return Number.isFinite(v) ? v.toFixed(3) : "-";
+    return Number.isFinite(v) ? v.toFixed(4) : "-";
   };
 
   return {
