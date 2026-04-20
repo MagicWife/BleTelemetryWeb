@@ -249,8 +249,8 @@ function updateVoltageBars(tele) {
   const range = Math.max(v1, v5, v6) > 6 ? 12 : 6;
   const pct = v => Math.max(0, Math.min(100, (v / range) * 100));
   dom.v1Text.textContent = `${v1.toFixed(3)} V`;
-  dom.v5Text.textContent = `${v5.toFixed(3)} V`;
-  dom.v6Text.textContent = `${v6.toFixed(3)} V`;
+  dom.v5Text.textContent = `${v5.toFixed(4)} V`;
+  dom.v6Text.textContent = `${v6.toFixed(4)} V`;
   dom.v1Bar.style.width = `${pct(v1)}%`;
   dom.v5Bar.style.width = `${pct(v5)}%`;
   dom.v6Bar.style.width = `${pct(v6)}%`;
