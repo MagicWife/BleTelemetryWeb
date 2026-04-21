@@ -192,16 +192,20 @@ function onFrame(payloadCsv) {
 
 function parseTelemetry(csv) {
   const p = csv.split(",");
+  // 至少需要 16 个字段（原有必需字段）
   if (p.length < 16) return null;
+
   const f = p.slice(0, 16).map(x => (x || "").trim());
+  // 新增 ms 字段（第 17 个字段，索引 16）
+  const ms = p[16] ? p[16].trim() : "";
 
   const t = f[1] || "";
   let timeStr = "-";
   if (t.length >= 12) {
     const YY = t.slice(0, 2), MM = t.slice(2, 4), DD = t.slice(4, 6);
     const hh = t.slice(6, 8), mm = t.slice(8, 10), ss = t.slice(10, 12);
-    const ms = t.length >= 15 ? t.slice(12, 15) : "000";
-    timeStr = `20${YY}-${MM}-${DD} ${hh}:${mm}:${ss}.${ms}`;
+    const msPart = t.length >= 15 ? t.slice(12, 15) : "000";
+    timeStr = `20${YY}-${MM}-${DD} ${hh}:${mm}:${ss}.${msPart}`;
   } else if (t) {
     timeStr = t;
   }
@@ -223,7 +227,8 @@ function parseTelemetry(csv) {
     ax: f2(f[4]), ay: f2(f[5]), az: f2(f[6]),
     gx: f2(f[7]), gy: f2(f[8]), gz: f2(f[9]),
     roll: f2(f[10]), pitch: f2(f[11]), yaw: f2(f[12]),
-    v1: f3(f[13]), v5: f3(f[14]), v6: f3(f[15])
+    v1: f3(f[13]), v5: f3(f[14]), v6: f3(f[15]),
+    ms: ms                // ← 新增毫秒字段
   };
 }
 
