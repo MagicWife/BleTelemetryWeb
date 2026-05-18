@@ -283,8 +283,8 @@ async function sendTcycle() {
     alert("还没有可写特征 FFF2");
     return;
   }
-  let ms = parseInt(dom.tcycleInput.value || "500", 10);
-  if (!Number.isFinite(ms) || ms <= 0) ms = 500;
+  let ms = parseInt(dom.tcycleInput.value || "10", 10);
+  if (!Number.isFinite(ms) || ms <= 0) ms = 10;
   ms = Math.max(1, Math.min(10000, ms));
   const cmd = `$AT+Tcycle=${ms}*\r\n`;
   const data = new TextEncoder().encode(cmd);
