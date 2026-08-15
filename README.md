@@ -9,8 +9,8 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 - Notify 数据接收
 - `$...*` 分包拼帧
 - 遥测解析与实时显示
+- IMU 温度实时显示与波形
 - 3D 飞机姿态显示
-- 地图定位显示
 - 电压条显示
 - 最近帧缓存
 - CSV 导出
@@ -19,7 +19,7 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 
 - `index.html`：主页面结构
 - `style.css`：界面样式
-- `app.js`：BLE、地图、姿态显示、CSV 导出等核心逻辑
+- `app.js`：BLE、遥测解析、姿态显示、CSV 导出等核心逻辑
 
 ## 功能说明
 
@@ -33,20 +33,24 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 收到完整帧后，程序会解析以下内容：
 
 - MAC
-- 时间
-- 经度 / 纬度
+- IMU 温度
 - 加速度 AX / AY / AZ
 - 陀螺仪 GX / GY / GZ
 - Roll / Pitch / Yaw
 - 电压 V1 / V5 / V6
+- 电量百分比：按 `clamp(PA1 / 3.7 × 100%, 0%, 100%)` 计算
+- MCU 启动后运行时间
+
+当前 MCU 数据帧格式：
+
+```text
+$MAC,tmp,AccX,AccY,AccZ,GyroX,GyroY,GyroZ,Roll,Pitch,Yaw,PA1,PA5,PA6,运行时间*\r\n
+```
 
 ### 4. 姿态显示
 页面集成 Three.js 飞机姿态视图，用于显示 roll / pitch / yaw 的实时变化。
 
-### 5. 地图显示
-页面集成 Leaflet 地图，支持显示设备当前位置，并自动进行 WGS84 / GCJ02 处理。
-
-### 6. 导出 CSV
+### 5. 导出 CSV
 点击“导出 CSV”按钮，可将当前接收到的遥测数据导出为 CSV 文件。
 
 ## 运行要求
@@ -67,10 +71,7 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
    - `https://` 页面
    - 或 `http://localhost`
 
-2. 地图瓦片服务在本地直接双击 `index.html` 打开时，可能因为 Referer 限制而异常。  
-   建议部署到 GitHub Pages 后再测试。
-
-3. 如果蓝牙连接按钮无反应，请检查：
+2. 如果蓝牙连接按钮无反应，请检查：
    - 浏览器是否支持 Web Bluetooth
    - 页面是否通过 HTTPS 打开
    - 控制台是否有 JS 报错
@@ -81,7 +82,6 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 
 ```bash
 python -m http.server 8000
-
-
+```
 
 online web: https://zhanghengee.github.io/BleTelemetryWeb/

@@ -5,12 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BLE Telemetry Aircraft HUD</title>
   <meta name="color-scheme" content="dark" />
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-    crossorigin=""
-  />
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
@@ -38,9 +32,8 @@
         <div class="button-grid">
           <button id="btnConnect" class="btn btn-primary">连接蓝牙</button>
           <button id="btnDisconnect" class="btn btn-secondary">断开连接</button>
-          <button id="btnExport" class="btn btn-secondary">导出 CSV</button>
-          <button id="btnClearFrames" class="btn btn-secondary">清空缓存</button>
         </div>
+        <button id="btnRecord" class="btn btn-secondary btn-wide">开始记录</button>
 
         <div class="section-title">设备状态</div>
         <div class="card-list">
@@ -59,7 +52,7 @@
         <div class="status-card">
           <label class="field">
             <span>周期 Tcycle (ms)</span>
-            <input id="tcycleInput" type="number" value="10" min="10" max="10000" />
+            <input id="tcycleInput" type="number" value="10" min="5" max="10000" />
           </label>
           <button id="btnSetTcycle" class="btn btn-primary btn-wide">发送到设备</button>
         </div>
@@ -67,30 +60,33 @@
         <div class="section-title">核心遥测</div>
         <div class="tele-grid">
           <div class="kv-card"><span>MAC</span><b id="tele-mac">-</b></div>
-          <div class="kv-card"><span>Time</span><b id="tele-time">-</b></div>
-          <div class="kv-card"><span>Longitude</span><b id="tele-lon">-</b></div>
-          <div class="kv-card"><span>Latitude</span><b id="tele-lat">-</b></div>
+          <div class="kv-card"><span>IMU Temperature</span><b id="tele-temp">-</b></div>
           <div class="kv-card"><span>Roll</span><b id="tele-roll">-</b></div>
           <div class="kv-card"><span>Pitch</span><b id="tele-pitch">-</b></div>
           <div class="kv-card"><span>Yaw</span><b id="tele-yaw">-</b></div>
           <div class="kv-card"><span>AX / AY / AZ</span><b id="tele-acc">-</b></div>
           <div class="kv-card"><span>GX / GY / GZ</span><b id="tele-gyro">-</b></div>
+          <div class="kv-card"><span>PA1</span><b id="tele-v1">-</b></div>
+          <div class="kv-card battery-card">
+            <span>Battery (PA1 / 3.7 V)</span>
+            <b id="tele-battery">-</b>
+            <div id="battery-track" class="battery-track" role="progressbar" aria-label="Battery level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div id="battery-fill" class="battery-fill"></div>
+            </div>
+          </div>
+          <div class="kv-card"><span>PA5</span><b id="tele-v5">-</b></div>
+          <div class="kv-card"><span>PA6</span><b id="tele-v6">-</b></div>
+          <div class="kv-card"><span>Uptime</span><b id="tele-uptime">-</b></div>
         </div>
 
-        <div class="section-title">电压监测</div>
-        <div class="card-list">
-          <div class="volt-card">
-            <div class="volt-head"><span>Battery V1</span><b id="v1Text">0.000 V</b></div>
-            <div class="bar"><div id="v1Bar" class="fill"></div></div>
-          </div>
-          <div class="volt-card">
-            <div class="volt-head"><span>Radar V5</span><b id="v5Text">0.000 V</b></div>
-            <div class="bar"><div id="v5Bar" class="fill"></div></div>
-          </div>
-          <div class="volt-card">
-            <div class="volt-head"><span>Radar V6</span><b id="v6Text">0.000 V</b></div>
-            <div class="bar"><div id="v6Bar" class="fill"></div></div>
-          </div>
+        <div class="section-title">实时波形 (5s)</div>
+        <div class="wave-grid">
+          <div class="wave-card"><div class="wave-label">AX (m/s²)</div><div class="wave-canvas-wrap"><canvas id="chartAx"></canvas></div></div>
+          <div class="wave-card"><div class="wave-label">AY (m/s²)</div><div class="wave-canvas-wrap"><canvas id="chartAy"></canvas></div></div>
+          <div class="wave-card"><div class="wave-label">AZ (m/s²)</div><div class="wave-canvas-wrap"><canvas id="chartAz"></canvas></div></div>
+          <div class="wave-card"><div class="wave-label">IMU Temperature (°C)</div><div class="wave-canvas-wrap"><canvas id="chartTemp"></canvas></div></div>
+          <div class="wave-card"><div class="wave-label">Radar V5 (V)</div><div class="wave-canvas-wrap"><canvas id="chartV5"></canvas></div></div>
+          <div class="wave-card"><div class="wave-label">Radar V6 (V)</div><div class="wave-canvas-wrap"><canvas id="chartV6"></canvas></div></div>
         </div>
 
         <div class="section-title">3D 飞机姿态 HUD</div>
@@ -117,26 +113,10 @@
       </div>
     </section>
 
-    <section class="right-panel glass">
-      <div class="map-head">
-        <div>
-          <h2>地图定位</h2>
-          <p id="coordMode">WGS84 / GCJ02 自动处理</p>
-        </div>
-        <div class="map-tags">
-          <span class="tag" id="mapStatus">No Fix</span>
-        </div>
-      </div>
-      <div id="map"></div>
-    </section>
   </div>
 
-  <script
-    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-    crossorigin=""
-  ></script>
   <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

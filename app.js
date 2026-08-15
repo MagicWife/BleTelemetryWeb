@@ -3,6 +3,7 @@ const CHAR_NOTIFY = "fff1";
 const CHAR_WRITE = "fff2";
 const START = "$";
 const END = "*";
+const BATTERY_FULL_VOLTAGE = 3.7;
 
 let bleDevice = null;
 let gattServer = null;
@@ -12,6 +13,9 @@ let rxBuffer = "";
 let frames = [];
 let rowsForCsv = [];
 let latestTele = null;
+
+let isRecording = false;
+let recordBuffer = [];
 
 const dom = {
   btState: document.getElementById("btState"),
@@ -23,8 +27,6 @@ const dom = {
   lastReceive: document.getElementById("lastReceive"),
   heroStatusText: document.getElementById("heroStatusText"),
   heroDot: document.getElementById("heroDot"),
-  mapStatus: document.getElementById("mapStatus"),
-  coordMode: document.getElementById("coordMode"),
   frames: document.getElementById("frames"),
   tcycleInput: document.getElementById("tcycleInput"),
   hudRoll: document.getElementById("hudRoll"),
@@ -33,31 +35,26 @@ const dom = {
   aircraft3d: document.getElementById("aircraft3d"),
   tele: {
     mac: document.getElementById("tele-mac"),
-    time: document.getElementById("tele-time"),
-    lon: document.getElementById("tele-lon"),
-    lat: document.getElementById("tele-lat"),
+    temp: document.getElementById("tele-temp"),
     roll: document.getElementById("tele-roll"),
     pitch: document.getElementById("tele-pitch"),
     yaw: document.getElementById("tele-yaw"),
     acc: document.getElementById("tele-acc"),
     gyro: document.getElementById("tele-gyro"),
+    v1: document.getElementById("tele-v1"),
+    battery: document.getElementById("tele-battery"),
+    batteryTrack: document.getElementById("battery-track"),
+    batteryFill: document.getElementById("battery-fill"),
+    v5: document.getElementById("tele-v5"),
+    v6: document.getElementById("tele-v6"),
+    uptime: document.getElementById("tele-uptime"),
   },
-  v1Text: document.getElementById("v1Text"),
-  v5Text: document.getElementById("v5Text"),
-  v6Text: document.getElementById("v6Text"),
-  v1Bar: document.getElementById("v1Bar"),
-  v5Bar: document.getElementById("v5Bar"),
-  v6Bar: document.getElementById("v6Bar"),
 };
 
 document.getElementById("btnConnect").addEventListener("click", connectBle);
 document.getElementById("btnDisconnect").addEventListener("click", disconnectBle);
 document.getElementById("btnSetTcycle").addEventListener("click", sendTcycle);
-document.getElementById("btnExport").addEventListener("click", exportCsv);
-document.getElementById("btnClearFrames").addEventListener("click", () => {
-  frames = [];
-  renderFrames();
-});
+document.getElementById("btnRecord").addEventListener("click", toggleRecord);
 
 function setState(kind, text) {
   dom.btState.textContent = text;
@@ -124,13 +121,48 @@ async function connectBle() {
 function onDisconnected() {
   dom.notifyState.textContent = "off";
   setState("warn", "已断开");
+  frames = [];
+  rowsForCsv = [];
+  rxBuffer = "";
+  renderFrames();
+  clearWaveCharts();
+  if (isRecording) stopRecord();
+}
+
+function toggleRecord() {
+  if (!isRecording) {
+    isRecording = true;
+    recordBuffer = [];
+    const btn = document.getElementById("btnRecord");
+    btn.textContent = "停止记录";
+    btn.style.background = "rgba(255,123,136,.25)";
+    btn.style.border = "1px solid rgba(255,123,136,.4)";
+  } else {
+    stopRecord();
+  }
+}
+
+function stopRecord() {
+  isRecording = false;
+  const btn = document.getElementById("btnRecord");
+  btn.textContent = "开始记录";
+  btn.style.background = "";
+  btn.style.border = "";
+
+  if (!recordBuffer.length) return;
+  const header = "tmp,ax,ay,az,v1,battery_percent,v5,v6,ms";
+  const content = [header, ...recordBuffer].join("\n");
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8;" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `ble_record_${Date.now()}.txt`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 async function disconnectBle() {
   try {
     if (bleDevice && bleDevice.gatt && bleDevice.gatt.connected) bleDevice.gatt.disconnect();
-    dom.notifyState.textContent = "off";
-    setState("warn", "已断开");
   } catch (err) {
     console.error(err);
   }
@@ -183,31 +215,38 @@ function onFrame(payloadCsv) {
   dom.frameCount.textContent = String(rowsForCsv.length);
   dom.lastReceive.textContent = fmtNow();
 
+  if (isRecording) {
+    recordBuffer.push(`${tele.tmp},${tele.ax},${tele.ay},${tele.az},${tele.v1},${tele.battery},${tele.v5},${tele.v6},${tele.ms}`);
+  }
+
   renderTelemetry(tele);
-  updateVoltageBars(tele);
+  pushWaveSample(tele);
   updateAircraftAttitude(tele);
-  updateMapFromTele(tele);
   renderFrames();
 }
 
+function voltageToBatteryPercent(voltage) {
+  return Math.min(100, Math.max(0, voltage / BATTERY_FULL_VOLTAGE * 100));
+}
+
 function parseTelemetry(csv) {
-  const p = csv.split(",");
-  // 至少需要 16 个字段（原有必需字段）
-  if (p.length < 16) return null;
+  const f = csv.split(",").map(x => (x || "").trim());
+  // MCU frame: MAC,tmp,AccX,AccY,AccZ,GyroX,GyroY,GyroZ,
+  //            Roll,Pitch,Yaw,PA1,PA5,PA6,uptime_ms
+  if (f.length !== 15) {
+    console.warn(`忽略字段数不匹配的遥测帧：期望 15，实际 ${f.length}`, csv);
+    return null;
+  }
 
-  const f = p.slice(0, 16).map(x => (x || "").trim());
-  // 新增 ms 字段（第 17 个字段，索引 16）
-  const ms = p[16] ? p[16].trim() : "";
+  if (!/^[0-9a-f]{12}$/i.test(f[0])) {
+    console.warn("忽略 MAC 格式无效的遥测帧", csv);
+    return null;
+  }
 
-  const t = f[1] || "";
-  let timeStr = "-";
-  if (t.length >= 12) {
-    const YY = t.slice(0, 2), MM = t.slice(2, 4), DD = t.slice(4, 6);
-    const hh = t.slice(6, 8), mm = t.slice(8, 10), ss = t.slice(10, 12);
-    const msPart = t.length >= 15 ? t.slice(12, 15) : "000";
-    timeStr = `20${YY}-${MM}-${DD} ${hh}:${mm}:${ss}.${msPart}`;
-  } else if (t) {
-    timeStr = t;
+  const numericValues = f.slice(1).map(Number);
+  if (numericValues.some(value => !Number.isFinite(value))) {
+    console.warn("忽略包含非数值字段的遥测帧", csv);
+    return null;
   }
 
   const f2 = x => {
@@ -219,46 +258,126 @@ function parseTelemetry(csv) {
     return Number.isFinite(v) ? v.toFixed(4) : "-";
   };
 
+  const batteryPercent = voltageToBatteryPercent(numericValues[10]);
+
   return {
-    mac: f[0] || "-",
-    timeStr,
-    lonStr: f[2] || "-",
-    latStr: f[3] || "-",
-    ax: f2(f[4]), ay: f2(f[5]), az: f2(f[6]),
-    gx: f2(f[7]), gy: f2(f[8]), gz: f2(f[9]),
-    roll: f2(f[10]), pitch: f2(f[11]), yaw: f2(f[12]),
-    v1: f3(f[13]), v5: f3(f[14]), v6: f3(f[15]),
-    ms: ms                // ← 新增毫秒字段
+    mac: f[0],
+    tmp: f2(f[1]),
+    ax: f2(f[2]), ay: f2(f[3]), az: f2(f[4]),
+    gx: f2(f[5]), gy: f2(f[6]), gz: f2(f[7]),
+    roll: f2(f[8]), pitch: f2(f[9]), yaw: f2(f[10]),
+    v1: f3(f[11]), v5: f3(f[12]), v6: f3(f[13]),
+    battery: batteryPercent.toFixed(1),
+    ms: String(Math.trunc(numericValues[13]))
   };
 }
 
 function renderTelemetry(tele) {
   dom.tele.mac.textContent = tele.mac;
-  dom.tele.time.textContent = tele.timeStr;
-  dom.tele.lon.textContent = tele.lonStr;
-  dom.tele.lat.textContent = tele.latStr;
+  dom.tele.temp.textContent = `${tele.tmp} °C`;
   dom.tele.roll.textContent = `${tele.roll}°`;
   dom.tele.pitch.textContent = `${tele.pitch}°`;
   dom.tele.yaw.textContent = `${tele.yaw}°`;
   dom.tele.acc.textContent = `${tele.ax} / ${tele.ay} / ${tele.az}`;
   dom.tele.gyro.textContent = `${tele.gx} / ${tele.gy} / ${tele.gz}`;
+  dom.tele.v1.textContent = `${tele.v1} V`;
+  const batteryPercent = Number(tele.battery);
+  dom.tele.battery.textContent = `${tele.battery} %`;
+  dom.tele.batteryTrack.setAttribute("aria-valuenow", tele.battery);
+  dom.tele.batteryFill.style.width = `${batteryPercent}%`;
+  dom.tele.batteryFill.style.background = batteryPercent <= 20
+    ? "var(--red)"
+    : batteryPercent <= 50
+      ? "var(--amber)"
+      : "var(--green)";
+  dom.tele.v5.textContent = `${tele.v5} V`;
+  dom.tele.v6.textContent = `${tele.v6} V`;
+  dom.tele.uptime.textContent = `${tele.ms} ms`;
   dom.hudRoll.textContent = `${Number(tele.roll).toFixed(1)}°`;
   dom.hudPitch.textContent = `${Number(tele.pitch).toFixed(1)}°`;
   dom.hudYaw.textContent = `${Number(tele.yaw).toFixed(1)}°`;
 }
 
-function updateVoltageBars(tele) {
-  const v1 = Number(tele.v1) || 0;
-  const v5 = Number(tele.v5) || 0;
-  const v6 = Number(tele.v6) || 0;
-  const range = Math.max(v1, v5, v6) > 6 ? 12 : 6;
-  const pct = v => Math.max(0, Math.min(100, (v / range) * 100));
-  dom.v1Text.textContent = `${v1.toFixed(3)} V`;
-  dom.v5Text.textContent = `${v5.toFixed(4)} V`;
-  dom.v6Text.textContent = `${v6.toFixed(4)} V`;
-  dom.v1Bar.style.width = `${pct(v1)}%`;
-  dom.v5Bar.style.width = `${pct(v5)}%`;
-  dom.v6Bar.style.width = `${pct(v6)}%`;
+// ===== Wave Charts =====
+const WAVE_WINDOW_MS = 5000;
+const waveBuffer = [];
+let lastChartRender = 0;
+const CHART_RENDER_INTERVAL = 100;
+const waveCharts = {};
+
+function initWaveCharts() {
+  const makeCfg = (label, color) => ({
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label,
+        data: [],
+        borderColor: color,
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.2,
+        fill: false,
+      }]
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { display: false },
+        y: {
+          ticks: { color: '#96aac7', font: { size: 10 }, maxTicksLimit: 4 },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          border: { color: 'rgba(255,255,255,0.1)' }
+        }
+      }
+    }
+  });
+  waveCharts.ax = new Chart(document.getElementById('chartAx'), makeCfg('AX', '#6aa9ff'));
+  waveCharts.ay = new Chart(document.getElementById('chartAy'), makeCfg('AY', '#37d29f'));
+  waveCharts.az = new Chart(document.getElementById('chartAz'), makeCfg('AZ', '#ffbe5c'));
+  waveCharts.tmp = new Chart(document.getElementById('chartTemp'), makeCfg('Temperature', '#56c7ff'));
+  waveCharts.v5 = new Chart(document.getElementById('chartV5'), makeCfg('V5', '#ff7b88'));
+  waveCharts.v6 = new Chart(document.getElementById('chartV6'), makeCfg('V6', '#c57bff'));
+}
+
+function pushWaveSample(tele) {
+  const now = Date.now();
+  waveBuffer.push({
+    t: now,
+    ax: parseFloat(tele.ax) || 0,
+    ay: parseFloat(tele.ay) || 0,
+    az: parseFloat(tele.az) || 0,
+    tmp: parseFloat(tele.tmp) || 0,
+    v5: parseFloat(tele.v5) || 0,
+    v6: parseFloat(tele.v6) || 0,
+  });
+  const cutoff = now - WAVE_WINDOW_MS;
+  while (waveBuffer.length && waveBuffer[0].t < cutoff) waveBuffer.shift();
+
+  if (now - lastChartRender < CHART_RENDER_INTERVAL) return;
+  lastChartRender = now;
+  renderWaveCharts();
+}
+
+function renderWaveCharts() {
+  for (const key of ['ax', 'ay', 'az', 'tmp', 'v5', 'v6']) {
+    const ch = waveCharts[key];
+    ch.data.labels = waveBuffer.map(() => '');
+    ch.data.datasets[0].data = waveBuffer.map(d => d[key]);
+    ch.update('none');
+  }
+}
+
+function clearWaveCharts() {
+  waveBuffer.length = 0;
+  for (const ch of Object.values(waveCharts)) {
+    ch.data.labels = [];
+    ch.data.datasets[0].data = [];
+    ch.update('none');
+  }
 }
 
 function renderFrames() {
@@ -285,7 +404,7 @@ async function sendTcycle() {
   }
   let ms = parseInt(dom.tcycleInput.value || "10", 10);
   if (!Number.isFinite(ms) || ms <= 0) ms = 10;
-  ms = Math.max(1, Math.min(10000, ms));
+  ms = Math.max(5, Math.min(10000, ms));
   const cmd = `$AT+Tcycle=${ms}*\r\n`;
   const data = new TextEncoder().encode(cmd);
 
@@ -326,95 +445,6 @@ function csvEscape(v) {
   const s = String(v ?? "");
   if (s.includes(",") || s.includes('"') || s.includes("\n")) return `"${s.replace(/"/g, '""')}"`;
   return s;
-}
-
-// ===== Map =====
-let map = null;
-let mapMarker = null;
-
-function initMap() {
-  map = L.map("map", { zoomControl: true, attributionControl: true }).setView([22.3193, 114.1694], 9);
-  L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: "&copy; OpenStreetMap contributors"
-  }).addTo(map);
-  L.control.scale().addTo(map);
-}
-initMap();
-
-function parseCoord(rawStr) {
-  const s = (rawStr || "").trim();
-  if (!s || s === "-") return null;
-  const dir = s[0];
-  const num = parseFloat(s.slice(1));
-  if (!Number.isFinite(num)) return null;
-  const sign = (dir === "W" || dir === "S") ? -1 : 1;
-  return sign * num;
-}
-
-function outOfChina(lat, lon) {
-  return lon < 72.004 || lon > 137.8347 || lat < 0.8293 || lat > 55.8271;
-}
-function transformLat(x, y) {
-  let ret = -100.0 + 2.0*x + 3.0*y + 0.2*y*y + 0.1*x*y + 0.2*Math.sqrt(Math.abs(x));
-  ret += (20.0*Math.sin(6.0*x*Math.PI) + 20.0*Math.sin(2.0*x*Math.PI)) * 2.0 / 3.0;
-  ret += (20.0*Math.sin(y*Math.PI) + 40.0*Math.sin(y/3.0*Math.PI)) * 2.0 / 3.0;
-  ret += (160.0*Math.sin(y/12.0*Math.PI) + 320.0*Math.sin(y*Math.PI/30.0)) * 2.0 / 3.0;
-  return ret;
-}
-function transformLon(x, y) {
-  let ret = 300.0 + x + 2.0*y + 0.1*x*x + 0.1*x*y + 0.1*Math.sqrt(Math.abs(x));
-  ret += (20.0*Math.sin(6.0*x*Math.PI) + 20.0*Math.sin(2.0*x*Math.PI)) * 2.0 / 3.0;
-  ret += (20.0*Math.sin(x*Math.PI) + 40.0*Math.sin(x/3.0*Math.PI)) * 2.0 / 3.0;
-  ret += (150.0*Math.sin(x/12.0*Math.PI) + 300.0*Math.sin(x/30.0*Math.PI)) * 2.0 / 3.0;
-  return ret;
-}
-function wgs84ToGcj02(lat, lon) {
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return [lat, lon, "Invalid"];
-  if (outOfChina(lat, lon)) return [lat, lon, "WGS84"];
-  const a = 6378245.0;
-  const ee = 0.00669342162296594323;
-  let dLat = transformLat(lon - 105.0, lat - 35.0);
-  let dLon = transformLon(lon - 105.0, lat - 35.0);
-  const radLat = lat / 180.0 * Math.PI;
-  let magic = Math.sin(radLat);
-  magic = 1 - ee * magic * magic;
-  const sqrtMagic = Math.sqrt(magic);
-  dLat = (dLat * 180.0) / ((a * (1 - ee)) / (magic * sqrtMagic) * Math.PI);
-  dLon = (dLon * 180.0) / (a / sqrtMagic * Math.cos(radLat) * Math.PI);
-  return [lat + dLat, lon + dLon, "WGS84→GCJ02"];
-}
-
-function updateMapFromTele(tele) {
-  const lon = parseCoord(tele.lonStr);
-  const lat = parseCoord(tele.latStr);
-  if (!Number.isFinite(lat) || !Number.isFinite(lon) || (Math.abs(lat) < 1e-8 && Math.abs(lon) < 1e-8)) {
-    dom.mapStatus.textContent = "No Fix";
-    return;
-  }
-  const [mLat, mLon, mode] = wgs84ToGcj02(lat, lon);
-  dom.coordMode.textContent = mode;
-  dom.mapStatus.textContent = "GPS Fix";
-
-  const deviceLabel = bleDevice?.name || "BLE Device";
-  const icon = L.divIcon({
-    className: "custom-marker-wrapper",
-    html: `
-      <div style="display:flex;flex-direction:column;align-items:center;">
-        <div style="padding:5px 10px;border-radius:999px;background:rgba(8,17,31,.92);border:1px solid rgba(255,255,255,.14);font-size:12px;color:#eef5ff;white-space:nowrap;box-shadow:0 8px 18px rgba(0,0,0,.26);">${deviceLabel}</div>
-        <div style="width:18px;height:18px;border-radius:50%;background:linear-gradient(135deg,#6aa9ff,#37d29f);border:3px solid rgba(255,255,255,.95);margin-top:6px;box-shadow:0 0 20px rgba(106,169,255,.55);"></div>
-      </div>`,
-    iconSize: [150, 54],
-    iconAnchor: [75, 49]
-  });
-
-  if (!mapMarker) {
-    mapMarker = L.marker([mLat, mLon], { icon }).addTo(map);
-  } else {
-    mapMarker.setLatLng([mLat, mLon]);
-    mapMarker.setIcon(icon);
-  }
-  map.setView([mLat, mLon], Math.max(map.getZoom(), 15), { animate: true });
 }
 
 // ===== Three.js aircraft =====
@@ -636,3 +666,4 @@ if (!navigator.bluetooth) {
 renderFrames();
 setState("warn", "未连接");
 dom.notifyState.textContent = "off";
+initWaveCharts();
