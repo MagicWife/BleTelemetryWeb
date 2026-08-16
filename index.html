@@ -66,7 +66,7 @@
           <div class="kv-card"><span>Yaw</span><b id="tele-yaw">-</b></div>
           <div class="kv-card"><span>AX / AY / AZ</span><b id="tele-acc">-</b></div>
           <div class="kv-card"><span>GX / GY / GZ</span><b id="tele-gyro">-</b></div>
-          <div class="kv-card"><span>PA1</span><b id="tele-v1">-</b></div>
+          <div class="kv-card"><span>Battery Voltage (PA1)</span><b id="tele-v1">-</b></div>
           <div class="kv-card battery-card">
             <span>Battery (PA1 / 3.7 V)</span>
             <b id="tele-battery">-</b>
@@ -76,6 +76,7 @@
           </div>
           <div class="kv-card"><span>PA5</span><b id="tele-v5">-</b></div>
           <div class="kv-card"><span>PA6</span><b id="tele-v6">-</b></div>
+          <div class="kv-card"><span>MX / MY / MZ (Gauss)</span><b id="tele-mag">-</b></div>
           <div class="kv-card"><span>Uptime</span><b id="tele-uptime">-</b></div>
         </div>
 
@@ -87,6 +88,9 @@
           <div class="wave-card"><div class="wave-label">IMU Temperature (°C)</div><div class="wave-canvas-wrap"><canvas id="chartTemp"></canvas></div></div>
           <div class="wave-card"><div class="wave-label">Radar V5 (V)</div><div class="wave-canvas-wrap"><canvas id="chartV5"></canvas></div></div>
           <div class="wave-card"><div class="wave-label">Radar V6 (V)</div><div class="wave-canvas-wrap"><canvas id="chartV6"></canvas></div></div>
+          <div class="wave-card"><div class="wave-label">Magnetic X (Gauss)</div><div class="wave-canvas-wrap"><canvas id="chartMx"></canvas></div></div>
+          <div class="wave-card"><div class="wave-label">Magnetic Y (Gauss)</div><div class="wave-canvas-wrap"><canvas id="chartMy"></canvas></div></div>
+          <div class="wave-card"><div class="wave-label">Magnetic Z (Gauss)</div><div class="wave-canvas-wrap"><canvas id="chartMz"></canvas></div></div>
         </div>
 
         <div class="section-title">3D 飞机姿态 HUD</div>

@@ -47,6 +47,7 @@ const dom = {
     batteryFill: document.getElementById("battery-fill"),
     v5: document.getElementById("tele-v5"),
     v6: document.getElementById("tele-v6"),
+    mag: document.getElementById("tele-mag"),
     uptime: document.getElementById("tele-uptime"),
   },
 };
@@ -150,7 +151,7 @@ function stopRecord() {
   btn.style.border = "";
 
   if (!recordBuffer.length) return;
-  const header = "tmp,ax,ay,az,v1,battery_percent,v5,v6,ms";
+  const header = "tmp,ax,ay,az,v1,battery_percent,v5,v6,mx,my,mz,ms";
   const content = [header, ...recordBuffer].join("\n");
   const blob = new Blob([content], { type: "text/plain;charset=utf-8;" });
   const a = document.createElement("a");
@@ -216,7 +217,7 @@ function onFrame(payloadCsv) {
   dom.lastReceive.textContent = fmtNow();
 
   if (isRecording) {
-    recordBuffer.push(`${tele.tmp},${tele.ax},${tele.ay},${tele.az},${tele.v1},${tele.battery},${tele.v5},${tele.v6},${tele.ms}`);
+    recordBuffer.push(`${tele.tmp},${tele.ax},${tele.ay},${tele.az},${tele.v1},${tele.battery},${tele.v5},${tele.v6},${tele.mx},${tele.my},${tele.mz},${tele.ms}`);
   }
 
   renderTelemetry(tele);
@@ -232,9 +233,9 @@ function voltageToBatteryPercent(voltage) {
 function parseTelemetry(csv) {
   const f = csv.split(",").map(x => (x || "").trim());
   // MCU frame: MAC,tmp,AccX,AccY,AccZ,GyroX,GyroY,GyroZ,
-  //            Roll,Pitch,Yaw,PA1,PA5,PA6,uptime_ms
-  if (f.length !== 15) {
-    console.warn(`忽略字段数不匹配的遥测帧：期望 15，实际 ${f.length}`, csv);
+  //            Roll,Pitch,Yaw,PA1,PA5,PA6,MagX,MagY,MagZ,uptime_ms
+  if (f.length !== 18) {
+    console.warn(`忽略字段数不匹配的遥测帧：期望 18，实际 ${f.length}`, csv);
     return null;
   }
 
@@ -267,8 +268,9 @@ function parseTelemetry(csv) {
     gx: f2(f[5]), gy: f2(f[6]), gz: f2(f[7]),
     roll: f2(f[8]), pitch: f2(f[9]), yaw: f2(f[10]),
     v1: f3(f[11]), v5: f3(f[12]), v6: f3(f[13]),
+    mx: f3(f[14]), my: f3(f[15]), mz: f3(f[16]),
     battery: batteryPercent.toFixed(1),
-    ms: String(Math.trunc(numericValues[13]))
+    ms: String(Math.trunc(numericValues[16]))
   };
 }
 
@@ -292,6 +294,7 @@ function renderTelemetry(tele) {
       : "var(--green)";
   dom.tele.v5.textContent = `${tele.v5} V`;
   dom.tele.v6.textContent = `${tele.v6} V`;
+  dom.tele.mag.textContent = `${tele.mx} / ${tele.my} / ${tele.mz} G`;
   dom.tele.uptime.textContent = `${tele.ms} ms`;
   dom.hudRoll.textContent = `${Number(tele.roll).toFixed(1)}°`;
   dom.hudPitch.textContent = `${Number(tele.pitch).toFixed(1)}°`;
@@ -341,6 +344,9 @@ function initWaveCharts() {
   waveCharts.tmp = new Chart(document.getElementById('chartTemp'), makeCfg('Temperature', '#56c7ff'));
   waveCharts.v5 = new Chart(document.getElementById('chartV5'), makeCfg('V5', '#ff7b88'));
   waveCharts.v6 = new Chart(document.getElementById('chartV6'), makeCfg('V6', '#c57bff'));
+  waveCharts.mx = new Chart(document.getElementById('chartMx'), makeCfg('Magnetic X', '#4dd0e1'));
+  waveCharts.my = new Chart(document.getElementById('chartMy'), makeCfg('Magnetic Y', '#f48fb1'));
+  waveCharts.mz = new Chart(document.getElementById('chartMz'), makeCfg('Magnetic Z', '#dce775'));
 }
 
 function pushWaveSample(tele) {
@@ -353,6 +359,9 @@ function pushWaveSample(tele) {
     tmp: parseFloat(tele.tmp) || 0,
     v5: parseFloat(tele.v5) || 0,
     v6: parseFloat(tele.v6) || 0,
+    mx: parseFloat(tele.mx) || 0,
+    my: parseFloat(tele.my) || 0,
+    mz: parseFloat(tele.mz) || 0,
   });
   const cutoff = now - WAVE_WINDOW_MS;
   while (waveBuffer.length && waveBuffer[0].t < cutoff) waveBuffer.shift();
@@ -363,7 +372,7 @@ function pushWaveSample(tele) {
 }
 
 function renderWaveCharts() {
-  for (const key of ['ax', 'ay', 'az', 'tmp', 'v5', 'v6']) {
+  for (const key of ['ax', 'ay', 'az', 'tmp', 'v5', 'v6', 'mx', 'my', 'mz']) {
     const ch = waveCharts[key];
     ch.data.labels = waveBuffer.map(() => '');
     ch.data.datasets[0].data = waveBuffer.map(d => d[key]);

@@ -10,6 +10,7 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 - `$...*` 分包拼帧
 - 遥测解析与实时显示
 - IMU 温度实时显示与波形
+- QMC5883P 三轴磁场数据显示与实时波形
 - 3D 飞机姿态显示
 - 电压条显示
 - 最近帧缓存
@@ -37,14 +38,15 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 - 加速度 AX / AY / AZ
 - 陀螺仪 GX / GY / GZ
 - Roll / Pitch / Yaw
-- 电压 V1 / V5 / V6
+- 电池电压 V1、ADC 电压 V5 / V6
+- QMC5883P 三轴磁场 MX / MY / MZ（Gauss）
 - 电量百分比：按 `clamp(PA1 / 3.7 × 100%, 0%, 100%)` 计算
 - MCU 启动后运行时间
 
 当前 MCU 数据帧格式：
 
 ```text
-$MAC,tmp,AccX,AccY,AccZ,GyroX,GyroY,GyroZ,Roll,Pitch,Yaw,PA1,PA5,PA6,运行时间*\r\n
+$MAC,tmp,AccX,AccY,AccZ,GyroX,GyroY,GyroZ,Roll,Pitch,Yaw,PA1,PA5,PA6,MagX,MagY,MagZ,运行时间*\r\n
 ```
 
 ### 4. 姿态显示
