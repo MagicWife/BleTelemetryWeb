@@ -7,7 +7,7 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 - Web Bluetooth 连接 BLE 设备
 - 自动匹配 `FFF0 / FFF1 / FFF2`
 - Notify 数据接收
-- `$...*` 分包拼帧
+- 固定长度二进制帧的跨 Notify 拼包与 CRC16 校验
 - 遥测解析与实时显示
 - IMU 温度实时显示与波形
 - QMC5883P 三轴磁场数据显示与实时波形
@@ -28,7 +28,9 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 点击“连接蓝牙”后，网页会调用浏览器的 Web Bluetooth 接口搜索并连接 BLE 设备。
 
 ### 2. 数据接收
-连接成功后，程序会订阅设备 Notify 特征值，接收字符串数据，并按 `$...*` 进行拼帧处理。
+连接成功后，程序会订阅设备 Notify 特征值。二进制流可以跨多个 Notify 到达，网页根据 `A5 5A` 帧头和长度字段重新拼帧，并在 CRC16 校验通过后解析。
+
+BLE 接收与页面渲染相互独立：所有有效帧均可被记录，界面只以 25 FPS 使用最新样本刷新，波形图以 10 FPS 重绘。
 
 ### 3. 数据解析
 收到完整帧后，程序会解析以下内容：
@@ -43,17 +45,29 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 - 电量百分比：按 `clamp(PA1 / 3.7 × 100%, 0%, 100%)` 计算
 - MCU 启动后运行时间
 
-当前 MCU 数据帧格式：
+当前 MCU 使用 46 字节、小端序的二进制帧：
 
-```text
-$MAC,tmp,AccX,AccY,AccZ,GyroX,GyroY,GyroZ,Roll,Pitch,Yaw,BatteryV,MagX,MagY,MagZ,运行时间*\r\n
-```
+| 偏移 | 长度 | 字段 | 编码 |
+|---:|---:|---|---|
+| 0 | 2 | 帧头 | `A5 5A` |
+| 2 | 1 | 协议版本 | `01` |
+| 3 | 1 | 总帧长 | `46` |
+| 4 | 2 | 序号 | `uint16` |
+| 6 | 6 | MAC | 显示顺序的 6 字节 |
+| 12 | 2 | 温度 | `int16 / 100` °C |
+| 14 | 6 | AX / AY / AZ | 三个 `int16 / 100` m/s² |
+| 20 | 6 | GX / GY / GZ | 三个 `int16 / 100` rad/s |
+| 26 | 6 | Roll / Pitch / Yaw | 三个 `int16 / 100` 度 |
+| 32 | 2 | 电池电压 | `uint16 / 1000` V |
+| 34 | 6 | MX / MY / MZ | 三个 `int16 / 1000` Gauss |
+| 40 | 4 | 运行时间 | `uint32` ms |
+| 44 | 2 | 校验 | CRC16-CCITT，覆盖字节 0–43 |
 
 ### 4. 姿态显示
 页面集成 Three.js 飞机姿态视图，用于显示 roll / pitch / yaw 的实时变化。
 
-### 5. 导出 CSV
-点击“导出 CSV”按钮，可将当前接收到的遥测数据导出为 CSV 文件。
+### 5. 记录 CSV
+点击“开始记录”后，所有通过 CRC 校验的二进制帧都会写入记录缓存；停止记录时下载 CSV。文件同时保存原始帧十六进制、协议版本、帧长、序号、CRC 和全部解码字段，便于定位链路丢帧。
 
 ## 运行要求
 

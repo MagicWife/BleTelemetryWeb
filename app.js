@@ -1,18 +1,25 @@
 const SERVICE_HINT = "fff0";
 const CHAR_NOTIFY = "fff1";
 const CHAR_WRITE = "fff2";
-const START = "$";
-const END = "*";
 const BATTERY_FULL_VOLTAGE = 3.7;
+const TELEMETRY_SYNC_0 = 0xA5;
+const TELEMETRY_SYNC_1 = 0x5A;
+const TELEMETRY_VERSION = 0x01;
+const TELEMETRY_FRAME_LENGTH = 46;
+const DISPLAY_INTERVAL_MS = 40; // 25 FPS
 
 let bleDevice = null;
 let gattServer = null;
 let notifyChar = null;
 let writeChar = null;
-let rxBuffer = "";
+let rxBuffer = new Uint8Array(0);
 let frames = [];
-let rowsForCsv = [];
 let latestTele = null;
+let latestReceiveText = "-";
+let totalFrameCount = 0;
+let lastRenderedSequence = null;
+let lastDisplayRender = 0;
+let isWritingTcycle = false;
 
 let isRecording = false;
 let recordBuffer = [];
@@ -29,6 +36,7 @@ const dom = {
   heroDot: document.getElementById("heroDot"),
   frames: document.getElementById("frames"),
   tcycleInput: document.getElementById("tcycleInput"),
+  btnSetTcycle: document.getElementById("btnSetTcycle"),
   hudRoll: document.getElementById("hudRoll"),
   hudPitch: document.getElementById("hudPitch"),
   hudYaw: document.getElementById("hudYaw"),
@@ -52,7 +60,7 @@ const dom = {
 
 document.getElementById("btnConnect").addEventListener("click", connectBle);
 document.getElementById("btnDisconnect").addEventListener("click", disconnectBle);
-document.getElementById("btnSetTcycle").addEventListener("click", sendTcycle);
+dom.btnSetTcycle.addEventListener("click", sendTcycle);
 document.getElementById("btnRecord").addEventListener("click", toggleRecord);
 
 function setState(kind, text) {
@@ -102,8 +110,8 @@ async function connectBle() {
     }
     if (!notifyChar) throw new Error("未找到 FFF1 notify characteristic");
 
-    await notifyChar.startNotifications();
     notifyChar.addEventListener("characteristicvaluechanged", handleNotify);
+    await notifyChar.startNotifications();
 
     dom.deviceName.textContent = bleDevice.name || "Unknown";
     dom.deviceId.textContent = bleDevice.id || "(opaque id)";
@@ -120,9 +128,18 @@ async function connectBle() {
 function onDisconnected() {
   dom.notifyState.textContent = "off";
   setState("warn", "已断开");
+  notifyChar = null;
+  writeChar = null;
+  gattServer = null;
   frames = [];
-  rowsForCsv = [];
-  rxBuffer = "";
+  latestTele = null;
+  latestReceiveText = "-";
+  totalFrameCount = 0;
+  lastRenderedSequence = null;
+  lastDisplayRender = 0;
+  rxBuffer = new Uint8Array(0);
+  dom.frameCount.textContent = "0";
+  dom.lastReceive.textContent = "-";
   renderFrames();
   clearWaveCharts();
   if (isRecording) stopRecord();
@@ -149,8 +166,14 @@ function stopRecord() {
   btn.style.border = "";
 
   if (!recordBuffer.length) return;
-  const header = "mac,tmp,acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,roll,pitch,yaw,battery_v,mag_x,mag_y,mag_z,timestamp_ms";
-  const content = [header, ...recordBuffer].join("\n");
+  const header = [
+    "receive_time_iso", "raw_frame_hex", "protocol_version", "frame_length",
+    "sequence", "mac", "tmp_c", "acc_x_mps2", "acc_y_mps2", "acc_z_mps2",
+    "gyro_x_rads", "gyro_y_rads", "gyro_z_rads", "roll_deg", "pitch_deg",
+    "yaw_deg", "battery_v", "mag_x_gauss", "mag_y_gauss", "mag_z_gauss",
+    "uptime_ms", "crc16"
+  ].join(",");
+  const content = `\uFEFF${[header, ...recordBuffer].join("\n")}`;
   const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -168,133 +191,152 @@ async function disconnectBle() {
 }
 
 function handleNotify(event) {
-  const chunk = new TextDecoder("utf-8").decode(event.target.value);
-  handleChunk(chunk);
+  const value = event.target.value;
+  const chunk = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  appendTelemetryBytes(chunk);
 }
 
-function handleChunk(chunk) {
-  if (!chunk) return;
-  rxBuffer += chunk;
+function appendTelemetryBytes(chunk) {
+  if (!chunk.length) return;
 
-  if (rxBuffer.length > 20000) {
-    const last = rxBuffer.lastIndexOf(START);
-    rxBuffer = last >= 0 ? rxBuffer.slice(last) : "";
-  }
+  const combined = new Uint8Array(rxBuffer.length + chunk.length);
+  combined.set(rxBuffer);
+  combined.set(chunk, rxBuffer.length);
+  rxBuffer = combined;
 
-  while (true) {
-    const s = rxBuffer.indexOf(START);
-    if (s < 0) return;
-    const e = rxBuffer.indexOf(END, s + 1);
-    if (e < 0) {
-      rxBuffer = rxBuffer.slice(s);
+  while (rxBuffer.length >= 4) {
+    let syncIndex = -1;
+    for (let i = 0; i < rxBuffer.length - 1; i++) {
+      if (rxBuffer[i] === TELEMETRY_SYNC_0 && rxBuffer[i + 1] === TELEMETRY_SYNC_1) {
+        syncIndex = i;
+        break;
+      }
+    }
+
+    if (syncIndex < 0) {
+      rxBuffer = rxBuffer[rxBuffer.length - 1] === TELEMETRY_SYNC_0
+        ? rxBuffer.slice(-1)
+        : new Uint8Array(0);
       return;
     }
-    const payload = rxBuffer.slice(s + 1, e).replace(/\r|\n/g, "").trim();
-    rxBuffer = rxBuffer.slice(e + 1);
-    if (!payload) continue;
-    onFrame(payload);
+    if (syncIndex > 0) rxBuffer = rxBuffer.slice(syncIndex);
+    if (rxBuffer.length < 4) return;
+
+    const version = rxBuffer[2];
+    const frameLength = rxBuffer[3];
+    if (version !== TELEMETRY_VERSION || frameLength !== TELEMETRY_FRAME_LENGTH) {
+      rxBuffer = rxBuffer.slice(1);
+      continue;
+    }
+    if (rxBuffer.length < frameLength) return;
+
+    const frame = rxBuffer.slice(0, frameLength);
+    const expectedCrc = frame[frameLength - 2] | (frame[frameLength - 1] << 8);
+    const actualCrc = crc16Ccitt(frame.subarray(0, frameLength - 2));
+    if (expectedCrc !== actualCrc) {
+      console.warn("忽略 CRC16 校验失败的遥测帧");
+      rxBuffer = rxBuffer.slice(1);
+      continue;
+    }
+
+    rxBuffer = rxBuffer.slice(frameLength);
+    const tele = parseTelemetryFrame(frame);
+    if (tele) acceptTelemetryFrame(tele);
   }
 }
 
-function onFrame(payloadCsv) {
-  const tele = parseTelemetry(payloadCsv);
-  if (!tele) return;
+function crc16Ccitt(bytes) {
+  let crc = 0xFFFF;
+  for (const byte of bytes) {
+    crc ^= byte << 8;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) : (crc << 1);
+      crc &= 0xFFFF;
+    }
+  }
+  return crc;
+}
 
+function bytesToHex(bytes) {
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+function parseTelemetryFrame(frame) {
+  if (frame.length !== TELEMETRY_FRAME_LENGTH) return null;
+  const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
+  const scaleI16 = (offset, scale) => view.getInt16(offset, true) / scale;
+  const mac = Array.from(frame.subarray(6, 12), byte => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase();
+  const batteryVoltage = view.getUint16(32, true) / 1000;
+
+  return {
+    receiveTimeIso: new Date().toISOString(),
+    rawHex: bytesToHex(frame),
+    version: frame[2],
+    frameLength: frame[3],
+    sequence: view.getUint16(4, true),
+    mac,
+    tmp: scaleI16(12, 100),
+    ax: scaleI16(14, 100), ay: scaleI16(16, 100), az: scaleI16(18, 100),
+    gx: scaleI16(20, 100), gy: scaleI16(22, 100), gz: scaleI16(24, 100),
+    roll: scaleI16(26, 100), pitch: scaleI16(28, 100), yaw: scaleI16(30, 100),
+    v1: batteryVoltage,
+    mx: scaleI16(34, 1000), my: scaleI16(36, 1000), mz: scaleI16(38, 1000),
+    battery: voltageToBatteryPercent(batteryVoltage),
+    ms: view.getUint32(40, true),
+    crc16: view.getUint16(44, true)
+  };
+}
+
+function telemetryToRecordLine(tele) {
+  return [
+    tele.receiveTimeIso, tele.rawHex, tele.version, tele.frameLength, tele.sequence, tele.mac,
+    tele.tmp.toFixed(2), tele.ax.toFixed(2), tele.ay.toFixed(2), tele.az.toFixed(2),
+    tele.gx.toFixed(2), tele.gy.toFixed(2), tele.gz.toFixed(2), tele.roll.toFixed(2),
+    tele.pitch.toFixed(2), tele.yaw.toFixed(2), tele.v1.toFixed(3), tele.mx.toFixed(3),
+    tele.my.toFixed(3), tele.mz.toFixed(3), tele.ms,
+    `0x${tele.crc16.toString(16).padStart(4, "0").toUpperCase()}`
+  ].map(csvEscape).join(",");
+}
+
+function acceptTelemetryFrame(tele) {
   latestTele = tele;
-  const frame = `$${payloadCsv}*`;
-  frames.unshift(frame);
-  frames = frames.slice(0, 20);
-
-  rowsForCsv.push({
-    receive_time: new Date().toISOString(),
-    raw_frame: frame,
-    ...tele
-  });
-
-  dom.frameCount.textContent = String(rowsForCsv.length);
-  dom.lastReceive.textContent = fmtNow();
+  latestReceiveText = fmtNow();
+  totalFrameCount += 1;
 
   if (isRecording) {
-    recordBuffer.push(payloadCsv);
+    recordBuffer.push(telemetryToRecordLine(tele));
   }
-
-  renderTelemetry(tele);
-  pushWaveSample(tele);
-  updateAircraftAttitude(tele);
-  renderFrames();
 }
 
 function voltageToBatteryPercent(voltage) {
   return Math.min(100, Math.max(0, voltage / BATTERY_FULL_VOLTAGE * 100));
 }
 
-function parseTelemetry(csv) {
-  const f = csv.split(",").map(x => (x || "").trim());
-  // MCU frame: MAC,tmp,AccX,AccY,AccZ,GyroX,GyroY,GyroZ,
-  //            Roll,Pitch,Yaw,BatteryV,MagX,MagY,MagZ,uptime_ms
-  if (f.length !== 16) {
-    console.warn(`忽略字段数不匹配的遥测帧：期望 16，实际 ${f.length}`, csv);
-    return null;
-  }
-
-  if (!/^[0-9a-f]{12}$/i.test(f[0])) {
-    console.warn("忽略 MAC 格式无效的遥测帧", csv);
-    return null;
-  }
-
-  const numericValues = f.slice(1).map(Number);
-  if (numericValues.some(value => !Number.isFinite(value))) {
-    console.warn("忽略包含非数值字段的遥测帧", csv);
-    return null;
-  }
-
-  const f2 = x => {
-    const v = parseFloat(x);
-    return Number.isFinite(v) ? v.toFixed(2) : "-";
-  };
-  const f3 = x => {
-    const v = parseFloat(x);
-    return Number.isFinite(v) ? v.toFixed(4) : "-";
-  };
-
-  const batteryPercent = voltageToBatteryPercent(numericValues[10]);
-
-  return {
-    mac: f[0],
-    tmp: f2(f[1]),
-    ax: f2(f[2]), ay: f2(f[3]), az: f2(f[4]),
-    gx: f2(f[5]), gy: f2(f[6]), gz: f2(f[7]),
-    roll: f2(f[8]), pitch: f2(f[9]), yaw: f2(f[10]),
-    v1: f3(f[11]),
-    mx: f3(f[12]), my: f3(f[13]), mz: f3(f[14]),
-    battery: batteryPercent.toFixed(1),
-    ms: String(Math.trunc(numericValues[14]))
-  };
-}
-
 function renderTelemetry(tele) {
   dom.tele.mac.textContent = tele.mac;
-  dom.tele.temp.textContent = `${tele.tmp} °C`;
-  dom.tele.roll.textContent = `${tele.roll}°`;
-  dom.tele.pitch.textContent = `${tele.pitch}°`;
-  dom.tele.yaw.textContent = `${tele.yaw}°`;
-  dom.tele.acc.textContent = `${tele.ax} / ${tele.ay} / ${tele.az}`;
-  dom.tele.gyro.textContent = `${tele.gx} / ${tele.gy} / ${tele.gz}`;
-  dom.tele.v1.textContent = `${tele.v1} V`;
-  const batteryPercent = Number(tele.battery);
-  dom.tele.battery.textContent = `${tele.battery} %`;
-  dom.tele.batteryTrack.setAttribute("aria-valuenow", tele.battery);
+  dom.tele.temp.textContent = `${tele.tmp.toFixed(2)} °C`;
+  dom.tele.roll.textContent = `${tele.roll.toFixed(2)}°`;
+  dom.tele.pitch.textContent = `${tele.pitch.toFixed(2)}°`;
+  dom.tele.yaw.textContent = `${tele.yaw.toFixed(2)}°`;
+  dom.tele.acc.textContent = `${tele.ax.toFixed(2)} / ${tele.ay.toFixed(2)} / ${tele.az.toFixed(2)}`;
+  dom.tele.gyro.textContent = `${tele.gx.toFixed(2)} / ${tele.gy.toFixed(2)} / ${tele.gz.toFixed(2)}`;
+  dom.tele.v1.textContent = `${tele.v1.toFixed(3)} V`;
+  const batteryPercent = tele.battery;
+  dom.tele.battery.textContent = `${tele.battery.toFixed(1)} %`;
+  dom.tele.batteryTrack.setAttribute("aria-valuenow", tele.battery.toFixed(1));
   dom.tele.batteryFill.style.width = `${batteryPercent}%`;
   dom.tele.batteryFill.style.background = batteryPercent <= 20
     ? "var(--red)"
     : batteryPercent <= 50
       ? "var(--amber)"
       : "var(--green)";
-  dom.tele.mag.textContent = `${tele.mx} / ${tele.my} / ${tele.mz} G`;
+  dom.tele.mag.textContent = `${tele.mx.toFixed(3)} / ${tele.my.toFixed(3)} / ${tele.mz.toFixed(3)} G`;
   dom.tele.uptime.textContent = `${tele.ms} ms`;
-  dom.hudRoll.textContent = `${Number(tele.roll).toFixed(1)}°`;
-  dom.hudPitch.textContent = `${Number(tele.pitch).toFixed(1)}°`;
-  dom.hudYaw.textContent = `${Number(tele.yaw).toFixed(1)}°`;
+  dom.hudRoll.textContent = `${tele.roll.toFixed(1)}°`;
+  dom.hudPitch.textContent = `${tele.pitch.toFixed(1)}°`;
+  dom.hudYaw.textContent = `${tele.yaw.toFixed(1)}°`;
 }
 
 // ===== Wave Charts =====
@@ -347,13 +389,13 @@ function pushWaveSample(tele) {
   const now = Date.now();
   waveBuffer.push({
     t: now,
-    ax: parseFloat(tele.ax) || 0,
-    ay: parseFloat(tele.ay) || 0,
-    az: parseFloat(tele.az) || 0,
-    tmp: parseFloat(tele.tmp) || 0,
-    mx: parseFloat(tele.mx) || 0,
-    my: parseFloat(tele.my) || 0,
-    mz: parseFloat(tele.mz) || 0,
+    ax: tele.ax || 0,
+    ay: tele.ay || 0,
+    az: tele.az || 0,
+    tmp: tele.tmp || 0,
+    mx: tele.mx || 0,
+    my: tele.my || 0,
+    mz: tele.mz || 0,
   });
   const cutoff = now - WAVE_WINDOW_MS;
   while (waveBuffer.length && waveBuffer[0].t < cutoff) waveBuffer.shift();
@@ -374,6 +416,7 @@ function renderWaveCharts() {
 
 function clearWaveCharts() {
   waveBuffer.length = 0;
+  lastChartRender = 0;
   for (const ch of Object.values(waveCharts)) {
     ch.data.labels = [];
     ch.data.datasets[0].data = [];
@@ -398,11 +441,33 @@ function renderFrames() {
   }
 }
 
+function renderDisplayFrame(timestamp) {
+  requestAnimationFrame(renderDisplayFrame);
+  if (!latestTele || timestamp - lastDisplayRender < DISPLAY_INTERVAL_MS) return;
+
+  lastDisplayRender = timestamp;
+  const tele = latestTele;
+
+  renderTelemetry(tele);
+  pushWaveSample(tele);
+  updateAircraftAttitude(tele);
+  dom.frameCount.textContent = String(totalFrameCount);
+  dom.lastReceive.textContent = latestReceiveText;
+
+  if (tele.sequence !== lastRenderedSequence) {
+    frames.unshift(`#${tele.sequence} ${tele.rawHex}`);
+    frames = frames.slice(0, 20);
+    lastRenderedSequence = tele.sequence;
+    renderFrames();
+  }
+}
+
 async function sendTcycle() {
   if (!writeChar) {
     alert("还没有可写特征 FFF2");
     return;
   }
+  if (isWritingTcycle) return;
   let ms = parseInt(dom.tcycleInput.value || "10", 10);
   if (!Number.isFinite(ms) || ms <= 0) ms = 10;
   ms = Math.max(5, Math.min(10000, ms));
@@ -410,9 +475,11 @@ async function sendTcycle() {
   const data = new TextEncoder().encode(cmd);
 
   try {
-    if (writeChar.writeValueWithResponse) {
+    isWritingTcycle = true;
+    dom.btnSetTcycle.disabled = true;
+    if (writeChar.properties.write && writeChar.writeValueWithResponse) {
       await writeChar.writeValueWithResponse(data);
-    } else if (writeChar.writeValueWithoutResponse) {
+    } else if (writeChar.properties.writeWithoutResponse && writeChar.writeValueWithoutResponse) {
       await writeChar.writeValueWithoutResponse(data);
     } else {
       await writeChar.writeValue(data);
@@ -421,25 +488,10 @@ async function sendTcycle() {
   } catch (err) {
     console.error(err);
     alert("发送失败: " + (err.message || String(err)));
+  } finally {
+    isWritingTcycle = false;
+    dom.btnSetTcycle.disabled = false;
   }
-}
-
-function exportCsv() {
-  if (!rowsForCsv.length) {
-    alert("暂无数据");
-    return;
-  }
-  const headers = Object.keys(rowsForCsv[0]);
-  const lines = [headers.join(",")];
-  for (const row of rowsForCsv) {
-    lines.push(headers.map(h => csvEscape(row[h])).join(","));
-  }
-  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `ble_telemetry_${Date.now()}.csv`;
-  a.click();
-  URL.revokeObjectURL(a.href);
 }
 
 function csvEscape(v) {
@@ -668,3 +720,4 @@ renderFrames();
 setState("warn", "未连接");
 dom.notifyState.textContent = "off";
 initWaveCharts();
+requestAnimationFrame(renderDisplayFrame);

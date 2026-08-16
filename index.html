@@ -103,12 +103,12 @@
           </div>
         </div>
 
-        <div class="section-title">最近帧</div>
+        <div class="section-title">最近二进制帧（Hex）</div>
         <div class="frames-list" id="frames"></div>
 
         <div class="section-title">使用提示</div>
         <div class="tip-box">
-          这版已改为非 module 方式加载 Three.js。若“连接蓝牙”仍无反应，请打开浏览器开发者工具查看 Console，或确认使用的是 Chrome / Edge 且页面在 HTTPS 环境。
+          遥测使用 46 字节二进制帧和 CRC16 校验；接收与显示已解耦，界面按 25 FPS 刷新。请使用 Chrome / Edge，并确保页面运行在 HTTPS 或 localhost 环境。
         </div>
       </div>
     </section>
