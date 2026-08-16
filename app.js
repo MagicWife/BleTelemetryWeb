@@ -149,12 +149,12 @@ function stopRecord() {
   btn.style.border = "";
 
   if (!recordBuffer.length) return;
-  const header = "tmp,ax,ay,az,v1,battery_percent,mx,my,mz,ms";
+  const header = "mac,tmp,acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,roll,pitch,yaw,battery_v,mag_x,mag_y,mag_z,timestamp_ms";
   const content = [header, ...recordBuffer].join("\n");
-  const blob = new Blob([content], { type: "text/plain;charset=utf-8;" });
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `ble_record_${Date.now()}.txt`;
+  a.download = `ble_record_${Date.now()}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
 }
@@ -215,7 +215,7 @@ function onFrame(payloadCsv) {
   dom.lastReceive.textContent = fmtNow();
 
   if (isRecording) {
-    recordBuffer.push(`${tele.tmp},${tele.ax},${tele.ay},${tele.az},${tele.v1},${tele.battery},${tele.mx},${tele.my},${tele.mz},${tele.ms}`);
+    recordBuffer.push(payloadCsv);
   }
 
   renderTelemetry(tele);
