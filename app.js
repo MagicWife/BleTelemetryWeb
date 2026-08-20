@@ -6,7 +6,20 @@ const TELEMETRY_SYNC_0 = 0xA5;
 const TELEMETRY_SYNC_1 = 0x5A;
 const TELEMETRY_VERSION = 0x01;
 const TELEMETRY_FRAME_LENGTH = 46;
-const DISPLAY_INTERVAL_MS = 40; // 25 FPS
+const DISPLAY_INTERVAL_MS = 100; // 10 FPS
+const AIRCRAFT_RENDER_INTERVAL_MS = 100; // 10 FPS
+const MAX_RENDER_PIXEL_RATIO = 1.25;
+const RECORD_CHUNK_INTERVAL_MS = 5 * 60 * 1000;
+const BEIJING_UTC_OFFSET_MS = 8 * 60 * 60 * 1000;
+const RECORD_CSV_HEADER = [
+  "timestamp_beijing_utc_plus_8",
+  "temperature_c",
+  "accel_x_mps2", "accel_y_mps2", "accel_z_mps2",
+  "gyro_x_rad_s", "gyro_y_rad_s", "gyro_z_rad_s",
+  "roll_deg", "pitch_deg", "yaw_deg",
+  "battery_voltage_v", "battery_percent",
+  "mag_x_gauss", "mag_y_gauss", "mag_z_gauss"
+].join(",");
 
 let bleDevice = null;
 let gattServer = null;
@@ -15,14 +28,17 @@ let writeChar = null;
 let rxBuffer = new Uint8Array(0);
 let frames = [];
 let latestTele = null;
-let latestReceiveText = "-";
+let latestReceiveTimestampMs = 0;
 let totalFrameCount = 0;
 let lastRenderedSequence = null;
-let lastDisplayRender = 0;
 let isWritingTcycle = false;
 
 let isRecording = false;
 let recordBuffer = [];
+let recordChunkStartedAtMs = 0;
+let recordChunkDeadlineMs = 0;
+let recordChunkIndex = 1;
+let recordFlushTimerId = null;
 
 const dom = {
   btState: document.getElementById("btState"),
@@ -37,6 +53,7 @@ const dom = {
   frames: document.getElementById("frames"),
   tcycleInput: document.getElementById("tcycleInput"),
   btnSetTcycle: document.getElementById("btnSetTcycle"),
+  btnRecord: document.getElementById("btnRecord"),
   hudRoll: document.getElementById("hudRoll"),
   hudPitch: document.getElementById("hudPitch"),
   hudYaw: document.getElementById("hudYaw"),
@@ -61,7 +78,7 @@ const dom = {
 document.getElementById("btnConnect").addEventListener("click", connectBle);
 document.getElementById("btnDisconnect").addEventListener("click", disconnectBle);
 dom.btnSetTcycle.addEventListener("click", sendTcycle);
-document.getElementById("btnRecord").addEventListener("click", toggleRecord);
+dom.btnRecord.addEventListener("click", toggleRecord);
 
 function setState(kind, text) {
   dom.btState.textContent = text;
@@ -71,8 +88,35 @@ function setState(kind, text) {
   dom.heroDot.style.boxShadow = `0 0 12px ${kind === "ok" ? "var(--green)" : kind === "danger" ? "var(--red)" : "var(--amber)"}`;
 }
 
+function padNumber(value, width = 2) {
+  return String(value).padStart(width, "0");
+}
+
+function beijingDateParts(timestampMs) {
+  const date = new Date(timestampMs + BEIJING_UTC_OFFSET_MS);
+  return {
+    year: date.getUTCFullYear(),
+    month: padNumber(date.getUTCMonth() + 1),
+    day: padNumber(date.getUTCDate()),
+    hour: padNumber(date.getUTCHours()),
+    minute: padNumber(date.getUTCMinutes()),
+    second: padNumber(date.getUTCSeconds()),
+    millisecond: padNumber(date.getUTCMilliseconds(), 3)
+  };
+}
+
+function formatBeijingTime(timestampMs = Date.now()) {
+  const p = beijingDateParts(timestampMs);
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}.${p.millisecond}+08:00`;
+}
+
+function formatBeijingFilenameTime(timestampMs) {
+  const p = beijingDateParts(timestampMs);
+  return `${p.year}${p.month}${p.day}_${p.hour}${p.minute}${p.second}`;
+}
+
 function fmtNow() {
-  return new Date().toLocaleString();
+  return formatBeijingTime(Date.now());
 }
 
 async function connectBle() {
@@ -133,10 +177,9 @@ function onDisconnected() {
   gattServer = null;
   frames = [];
   latestTele = null;
-  latestReceiveText = "-";
+  latestReceiveTimestampMs = 0;
   totalFrameCount = 0;
   lastRenderedSequence = null;
-  lastDisplayRender = 0;
   rxBuffer = new Uint8Array(0);
   dom.frameCount.textContent = "0";
   dom.lastReceive.textContent = "-";
@@ -147,39 +190,96 @@ function onDisconnected() {
 
 function toggleRecord() {
   if (!isRecording) {
-    isRecording = true;
-    recordBuffer = [];
-    const btn = document.getElementById("btnRecord");
-    btn.textContent = "停止记录";
-    btn.style.background = "rgba(255,123,136,.25)";
-    btn.style.border = "1px solid rgba(255,123,136,.4)";
+    startRecord();
   } else {
     stopRecord();
   }
 }
 
-function stopRecord() {
-  isRecording = false;
-  const btn = document.getElementById("btnRecord");
-  btn.textContent = "开始记录";
-  btn.style.background = "";
-  btn.style.border = "";
+function startRecord() {
+  const now = Date.now();
+  isRecording = true;
+  recordBuffer = [];
+  recordChunkStartedAtMs = now;
+  recordChunkDeadlineMs = now + RECORD_CHUNK_INTERVAL_MS;
+  recordChunkIndex = 1;
+  scheduleRecordFlush();
 
-  if (!recordBuffer.length) return;
-  const header = [
-    "receive_time_iso", "raw_frame_hex", "protocol_version", "frame_length",
-    "sequence", "mac", "tmp_c", "acc_x_mps2", "acc_y_mps2", "acc_z_mps2",
-    "gyro_x_rads", "gyro_y_rads", "gyro_z_rads", "roll_deg", "pitch_deg",
-    "yaw_deg", "battery_v", "mag_x_gauss", "mag_y_gauss", "mag_z_gauss",
-    "uptime_ms", "crc16"
-  ].join(",");
-  const content = `\uFEFF${[header, ...recordBuffer].join("\n")}`;
+  dom.btnRecord.textContent = "停止记录（每5分钟自动保存）";
+  dom.btnRecord.style.background = "rgba(255,123,136,.25)";
+  dom.btnRecord.style.border = "1px solid rgba(255,123,136,.4)";
+}
+
+function scheduleRecordFlush() {
+  if (recordFlushTimerId !== null) clearTimeout(recordFlushTimerId);
+  if (!isRecording) return;
+
+  const delay = Math.max(0, recordChunkDeadlineMs - Date.now());
+  recordFlushTimerId = window.setTimeout(() => {
+    recordFlushTimerId = null;
+    if (!isRecording) return;
+    advanceRecordingWindow(Date.now());
+    scheduleRecordFlush();
+  }, delay);
+}
+
+function advanceRecordingWindow(timestampMs) {
+  if (!isRecording || timestampMs < recordChunkDeadlineMs) return;
+
+  const elapsedIntervals = Math.floor(
+    (timestampMs - recordChunkDeadlineMs) / RECORD_CHUNK_INTERVAL_MS
+  );
+  flushRecordChunk(recordChunkDeadlineMs);
+  recordChunkStartedAtMs = recordChunkDeadlineMs + elapsedIntervals * RECORD_CHUNK_INTERVAL_MS;
+  recordChunkDeadlineMs = recordChunkStartedAtMs + RECORD_CHUNK_INTERVAL_MS;
+}
+
+function flushRecordChunk(chunkEndedAtMs) {
+  // Swap first so incoming frames always enter a fresh buffer.
+  const rows = recordBuffer;
+  recordBuffer = [];
+  if (!rows.length) return;
+
+  const chunkStartedAtMs = recordChunkStartedAtMs;
+  const part = padNumber(recordChunkIndex, 3);
+  recordChunkIndex += 1;
+  const content = `\uFEFF${RECORD_CSV_HEADER}\r\n${rows.join("\r\n")}`;
   const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  rows.length = 0;
+
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `ble_record_${Date.now()}.csv`;
+  a.href = url;
+  a.download = [
+    "ble_record",
+    formatBeijingFilenameTime(chunkStartedAtMs),
+    "to",
+    formatBeijingFilenameTime(chunkEndedAtMs),
+    `part${part}.csv`
+  ].join("_");
+  a.style.display = "none";
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(a.href);
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function stopRecord() {
+  if (!isRecording) return;
+
+  const stoppedAtMs = Date.now();
+  isRecording = false;
+  if (recordFlushTimerId !== null) {
+    clearTimeout(recordFlushTimerId);
+    recordFlushTimerId = null;
+  }
+  flushRecordChunk(stoppedAtMs);
+  recordChunkStartedAtMs = 0;
+  recordChunkDeadlineMs = 0;
+
+  dom.btnRecord.textContent = "开始记录";
+  dom.btnRecord.style.background = "";
+  dom.btnRecord.style.border = "";
 }
 
 async function disconnectBle() {
@@ -271,10 +371,8 @@ function parseTelemetryFrame(frame) {
   const batteryVoltage = view.getUint16(32, true) / 1000;
 
   return {
-    receiveTimeIso: new Date().toISOString(),
-    rawHex: bytesToHex(frame),
-    version: frame[2],
-    frameLength: frame[3],
+    receivedAtMs: Date.now(),
+    rawFrame: frame,
     sequence: view.getUint16(4, true),
     mac,
     tmp: scaleI16(12, 100),
@@ -284,28 +382,27 @@ function parseTelemetryFrame(frame) {
     v1: batteryVoltage,
     mx: scaleI16(34, 1000), my: scaleI16(36, 1000), mz: scaleI16(38, 1000),
     battery: voltageToBatteryPercent(batteryVoltage),
-    ms: view.getUint32(40, true),
-    crc16: view.getUint16(44, true)
+    ms: view.getUint32(40, true)
   };
 }
 
 function telemetryToRecordLine(tele) {
   return [
-    tele.receiveTimeIso, tele.rawHex, tele.version, tele.frameLength, tele.sequence, tele.mac,
+    formatBeijingTime(tele.receivedAtMs),
     tele.tmp.toFixed(2), tele.ax.toFixed(2), tele.ay.toFixed(2), tele.az.toFixed(2),
     tele.gx.toFixed(2), tele.gy.toFixed(2), tele.gz.toFixed(2), tele.roll.toFixed(2),
-    tele.pitch.toFixed(2), tele.yaw.toFixed(2), tele.v1.toFixed(3), tele.mx.toFixed(3),
-    tele.my.toFixed(3), tele.mz.toFixed(3), tele.ms,
-    `0x${tele.crc16.toString(16).padStart(4, "0").toUpperCase()}`
+    tele.pitch.toFixed(2), tele.yaw.toFixed(2), tele.v1.toFixed(3), tele.battery.toFixed(1),
+    tele.mx.toFixed(3), tele.my.toFixed(3), tele.mz.toFixed(3)
   ].map(csvEscape).join(",");
 }
 
 function acceptTelemetryFrame(tele) {
   latestTele = tele;
-  latestReceiveText = fmtNow();
+  latestReceiveTimestampMs = tele.receivedAtMs;
   totalFrameCount += 1;
 
   if (isRecording) {
+    advanceRecordingWindow(tele.receivedAtMs);
     recordBuffer.push(telemetryToRecordLine(tele));
   }
 }
@@ -343,7 +440,7 @@ function renderTelemetry(tele) {
 const WAVE_WINDOW_MS = 5000;
 const waveBuffer = [];
 let lastChartRender = 0;
-const CHART_RENDER_INTERVAL = 100;
+const CHART_RENDER_INTERVAL = DISPLAY_INTERVAL_MS;
 const waveCharts = {};
 
 function initWaveCharts() {
@@ -386,7 +483,7 @@ function initWaveCharts() {
 }
 
 function pushWaveSample(tele) {
-  const now = Date.now();
+  const now = tele.receivedAtMs;
   waveBuffer.push({
     t: now,
     ax: tele.ax || 0,
@@ -441,21 +538,22 @@ function renderFrames() {
   }
 }
 
-function renderDisplayFrame(timestamp) {
-  requestAnimationFrame(renderDisplayFrame);
-  if (!latestTele || timestamp - lastDisplayRender < DISPLAY_INTERVAL_MS) return;
+function renderDisplayFrame() {
+  window.setTimeout(renderDisplayFrame, DISPLAY_INTERVAL_MS);
+  if (!latestTele) return;
 
-  lastDisplayRender = timestamp;
   const tele = latestTele;
 
   renderTelemetry(tele);
   pushWaveSample(tele);
   updateAircraftAttitude(tele);
   dom.frameCount.textContent = String(totalFrameCount);
-  dom.lastReceive.textContent = latestReceiveText;
+  dom.lastReceive.textContent = latestReceiveTimestampMs
+    ? formatBeijingTime(latestReceiveTimestampMs)
+    : "-";
 
   if (tele.sequence !== lastRenderedSequence) {
-    frames.unshift(`#${tele.sequence} ${tele.rawHex}`);
+    frames.unshift(`#${tele.sequence} ${bytesToHex(tele.rawFrame)}`);
     frames = frames.slice(0, 20);
     lastRenderedSequence = tele.sequence;
     renderFrames();
@@ -517,7 +615,7 @@ const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100);
 camera.position.set(0, 0, 10);
 camera.lookAt(0, 0, 0);
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_RENDER_PIXEL_RATIO));
   renderer.setClearColor(0x000000, 0);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   container.appendChild(renderer.domElement);
@@ -680,12 +778,15 @@ camera.lookAt(0, 0, 0);
     targetQuat.setFromEuler(euler);
   }
 
-  const clock = new THREE.Clock();
+  let lastAircraftRender = performance.now();
   function animate() {
-    requestAnimationFrame(animate);
-    const t = clock.getElapsedTime();
+    window.setTimeout(animate, AIRCRAFT_RENDER_INTERVAL_MS);
+    const timestamp = performance.now();
+    const deltaSeconds = Math.min((timestamp - lastAircraftRender) / 1000, 0.25);
+    lastAircraftRender = timestamp;
+    const t = timestamp / 1000;
 
-    currentQuat.slerp(targetQuat, 0.14);
+    currentQuat.slerp(targetQuat, 1 - Math.exp(-8 * deltaSeconds));
     aircraftPivot.quaternion.copy(currentQuat);
 
     glowL.material.opacity = 0.48 + 0.16 * Math.sin(t * 3.2);
@@ -694,7 +795,7 @@ camera.lookAt(0, 0, 0);
     aircraft.rotation.y = 0.06 * Math.sin(t * 0.9);
     renderer.render(scene, camera);
   }
-  animate();
+  window.setTimeout(animate, AIRCRAFT_RENDER_INTERVAL_MS);
 
   return { setAttitude };
 }
@@ -720,4 +821,4 @@ renderFrames();
 setState("warn", "未连接");
 dom.notifyState.textContent = "off";
 initWaveCharts();
-requestAnimationFrame(renderDisplayFrame);
+window.setTimeout(renderDisplayFrame, DISPLAY_INTERVAL_MS);
