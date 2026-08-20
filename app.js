@@ -6,8 +6,8 @@ const TELEMETRY_SYNC_0 = 0xA5;
 const TELEMETRY_SYNC_1 = 0x5A;
 const TELEMETRY_VERSION = 0x01;
 const TELEMETRY_FRAME_LENGTH = 46;
-const DISPLAY_INTERVAL_MS = 100; // 10 FPS
-const AIRCRAFT_RENDER_INTERVAL_MS = 100; // 10 FPS
+const DISPLAY_INTERVAL_MS = 50; // 20 FPS
+const AIRCRAFT_RENDER_INTERVAL_MS = 50; // 20 FPS
 const MAX_RENDER_PIXEL_RATIO = 1.25;
 const RECORD_CHUNK_INTERVAL_MS = 5 * 60 * 1000;
 const BEIJING_UTC_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -18,7 +18,8 @@ const RECORD_CSV_HEADER = [
   "gyro_x_rad_s", "gyro_y_rad_s", "gyro_z_rad_s",
   "roll_deg", "pitch_deg", "yaw_deg",
   "battery_voltage_v", "battery_percent",
-  "mag_x_gauss", "mag_y_gauss", "mag_z_gauss"
+  "mag_x_gauss", "mag_y_gauss", "mag_z_gauss",
+  "uptime_ms"
 ].join(",");
 
 let bleDevice = null;
@@ -392,7 +393,7 @@ function telemetryToRecordLine(tele) {
     tele.tmp.toFixed(2), tele.ax.toFixed(2), tele.ay.toFixed(2), tele.az.toFixed(2),
     tele.gx.toFixed(2), tele.gy.toFixed(2), tele.gz.toFixed(2), tele.roll.toFixed(2),
     tele.pitch.toFixed(2), tele.yaw.toFixed(2), tele.v1.toFixed(3), tele.battery.toFixed(1),
-    tele.mx.toFixed(3), tele.my.toFixed(3), tele.mz.toFixed(3)
+    tele.mx.toFixed(3), tele.my.toFixed(3), tele.mz.toFixed(3), tele.ms
   ].map(csvEscape).join(",");
 }
 
