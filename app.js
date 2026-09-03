@@ -1,7 +1,8 @@
 const SERVICE_HINT = "fff0";
 const CHAR_NOTIFY = "fff1";
 const CHAR_WRITE = "fff2";
-const BATTERY_FULL_VOLTAGE = 3.7;
+const BATTERY_EMPTY_VOLTAGE = 2.5;
+const BATTERY_VOLTAGE_RANGE = 1.2;
 const TELEMETRY_SYNC_0 = 0xA5;
 const TELEMETRY_SYNC_1 = 0x5A;
 const TELEMETRY_VERSION = 0x01;
@@ -409,7 +410,10 @@ function acceptTelemetryFrame(tele) {
 }
 
 function voltageToBatteryPercent(voltage) {
-  return Math.min(100, Math.max(0, voltage / BATTERY_FULL_VOLTAGE * 100));
+  return Math.min(
+    100,
+    Math.max(0, (voltage - BATTERY_EMPTY_VOLTAGE) / BATTERY_VOLTAGE_RANGE * 100)
+  );
 }
 
 function renderTelemetry(tele) {
