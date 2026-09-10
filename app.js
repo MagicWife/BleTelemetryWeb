@@ -7,6 +7,7 @@ const TELEMETRY_SYNC_0 = 0xA5;
 const TELEMETRY_SYNC_1 = 0x5A;
 const TELEMETRY_VERSION = 0x01;
 const TELEMETRY_FRAME_LENGTH = 46;
+const DEFAULT_TCYCLE_MS = 20;
 const DISPLAY_INTERVAL_MS = 50; // 20 FPS
 const AIRCRAFT_RENDER_INTERVAL_MS = 50; // 20 FPS
 const MAX_RENDER_PIXEL_RATIO = 1.25;
@@ -571,8 +572,8 @@ async function sendTcycle() {
     return;
   }
   if (isWritingTcycle) return;
-  let ms = parseInt(dom.tcycleInput.value || "10", 10);
-  if (!Number.isFinite(ms) || ms <= 0) ms = 10;
+  let ms = parseInt(dom.tcycleInput.value || String(DEFAULT_TCYCLE_MS), 10);
+  if (!Number.isFinite(ms) || ms <= 0) ms = DEFAULT_TCYCLE_MS;
   ms = Math.max(5, Math.min(10000, ms));
   const cmd = `$AT+Tcycle=${ms}*\r\n`;
   const data = new TextEncoder().encode(cmd);

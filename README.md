@@ -27,6 +27,8 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 ### 1. 蓝牙连接
 点击“连接蓝牙”后，网页会调用浏览器的 Web Bluetooth 接口搜索并连接 BLE 设备。
 
+发送周期参数 `Tcycle` 的页面默认值为 20 ms。
+
 ### 2. 数据接收
 连接成功后，程序会订阅设备 Notify 特征值。二进制流可以跨多个 Notify 到达，网页根据 `A5 5A` 帧头和长度字段重新拼帧，并在 CRC16 校验通过后解析。
 
