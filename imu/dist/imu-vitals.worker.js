@@ -29,7 +29,7 @@
         estimatorHistoryWarmupSec: 60,
         rawImuQualityWindowSec: 10,
         rawImuQualityMinimumRejectRunSec: 1,
-        rawImuQualityAcceptConfirmSec: 3,
+        rawImuQualityAcceptConfirmSec: 2,
         rawImuQualityLongGapResetSec: 10,
         rawImuQualityMediumGapMinSec: 3,
         rawImuQualityRecoveryConfirmSec: 5,
@@ -42,16 +42,21 @@
           invalidCoverage: 0.5,
           validFiniteRatio: 0.99,
           invalidFiniteRatio: 0.8,
-          validStuckRatio: 0.05,
-          invalidStuckRatio: 0.5
+          // BLE physical values are quantized to 0.01; repeated static samples are normal.
+          validStuckRatio: 0.95,
+          invalidStuckRatio: 0.995
         },
         rawImuQualityMotion: {
-          accMadP95: 0.02933569594836624,
-          accMadP99: 0.0560047932263039,
-          gyroRmsP95: 0.11012278065735638,
-          gyroRmsP99: 0.3628267925229166,
-          shockP95: 0.05267967548330664,
-          shockP99: 0.10793587174348677
+          // Acceleration: m/s²; gyro: deg/s AFTER the rad/s input conversion.
+          // One wire-format gyro step is 0.01 rad/s = 0.573 deg/s.
+          accMadP95: 0.12,
+          accMadP99: 0.35,
+          gyroRmsP95: 1.5,
+          gyroRmsP99: 5,
+          shockP95: 0.15,
+          shockP99: 0.3,
+          // Ignore a few acceleration quantization steps when the window MAD is zero.
+          shockAbsoluteFloor: 0.05
         },
         // Frequency bands.
         respiratoryBand: [10 / 60, 0.5],
@@ -1165,7 +1170,10 @@
           }
           const jerkCenter = median(jerk);
           const jerkMad = mad(jerk);
-          const shockThreshold = jerkCenter + 8 * Math.max(jerkMad, 1e-6);
+          const shockThreshold = Math.max(
+            motionThresholds.shockAbsoluteFloor || 0,
+            jerkCenter + 8 * Math.max(jerkMad, 1e-6)
+          );
           const metrics = {
             sampleCoverage: Math.min(1, observableCoverage),
             finiteRatio: finite.length / Math.max(1, selected.length),

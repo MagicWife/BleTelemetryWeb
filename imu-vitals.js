@@ -145,7 +145,7 @@
     createWorker() {
       try {
         const sessionId = this.sessionId;
-        this.worker = new Worker('./imu/dist/imu-vitals.worker.js');
+        this.worker = new Worker('./imu/dist/imu-vitals.worker.js?v=quality-20260914');
         this.worker.onmessage = event => {
           const message = event.data || {};
           if (sessionId !== this.sessionId || message.sessionId !== sessionId) return;
@@ -217,9 +217,15 @@
       text('vitalsQuality', quality ? '通过' : '未通过');
       text('vitalsWindows', (result.available_windows || []).map(value => `${value}s`).join(' / ') || '--');
       text('vitalsElapsed', `${result.session_elapsed_s.toFixed(0)} s`);
-      const reasons = (result.quality_reject_reasons || []).join('、');
+      const reasonLabels = {
+        invalid_window: '数据无效或几乎完全不变，请检查传感器数据',
+        strong_motion: '运动幅度超过宽松门控阈值',
+        impact: '检测到明显冲击',
+        quality_recovery_pending: '信号恢复中，等待连续正常窗口'
+      };
+      const reasons = (result.quality_reject_reasons || []).map(reason => reasonLabels[reason] || reason).join('；');
       text('vitalsDetail', reasons || (result.fully_warmed_up ? '长期轨迹预热完成' : `长期轨迹预热 ${Math.round(result.warmup_progress * 100)}%`));
-      this.setState(!quality ? '信号质量不足，请保持静止' : hr === null && rr === null
+      this.setState(!quality ? '质量检查未通过，请查看下方原因' : hr === null && rr === null
         ? '暂无可靠结果，继续采集' : result.fully_warmed_up ? '实时预测中' : '实时预测中 · 长期轨迹预热',
       quality ? 'running' : 'rejected');
       if (this.chart) {

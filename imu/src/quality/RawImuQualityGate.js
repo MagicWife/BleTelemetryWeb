@@ -82,7 +82,10 @@ function buildRawImuQualityGate(samples, sampleRateHz, options = {}) {
     }
     const jerkCenter = median(jerk);
     const jerkMad = mad(jerk);
-    const shockThreshold = jerkCenter + 8 * Math.max(jerkMad, 1e-6);
+    const shockThreshold = Math.max(
+      motionThresholds.shockAbsoluteFloor || 0,
+      jerkCenter + 8 * Math.max(jerkMad, 1e-6)
+    );
     const metrics = {
       sampleCoverage: Math.min(1, observableCoverage),
       finiteRatio: finite.length / Math.max(1, selected.length),
