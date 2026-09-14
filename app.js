@@ -35,6 +35,7 @@ let latestReceiveTimestampMs = 0;
 let totalFrameCount = 0;
 let lastRenderedSequence = null;
 let isWritingTcycle = false;
+const imuVitals = new window.ImuVitals();
 
 let isRecording = false;
 let recordBuffer = [];
@@ -82,6 +83,10 @@ document.getElementById("btnConnect").addEventListener("click", connectBle);
 document.getElementById("btnDisconnect").addEventListener("click", disconnectBle);
 dom.btnSetTcycle.addEventListener("click", sendTcycle);
 dom.btnRecord.addEventListener("click", toggleRecord);
+document.getElementById("btnResetVitals").addEventListener("click", () => {
+  if (gattServer && gattServer.connected) imuVitals.startSession();
+  else imuVitals.reset('请先连接蓝牙');
+});
 
 function setState(kind, text) {
   dom.btState.textContent = text;
@@ -157,6 +162,8 @@ async function connectBle() {
     }
     if (!notifyChar) throw new Error("未找到 FFF1 notify characteristic");
 
+    rxBuffer = new Uint8Array(0);
+    imuVitals.startSession();
     notifyChar.addEventListener("characteristicvaluechanged", handleNotify);
     await notifyChar.startNotifications();
 
@@ -166,6 +173,7 @@ async function connectBle() {
     dom.sessionTime.textContent = fmtNow();
     setState("ok", "已连接");
   } catch (err) {
+    imuVitals.reset('蓝牙连接失败');
     console.error(err);
     setState("danger", "连接失败");
     alert(err.message || String(err));
@@ -173,6 +181,7 @@ async function connectBle() {
 }
 
 function onDisconnected() {
+  imuVitals.reset('蓝牙已断开');
   dom.notifyState.textContent = "off";
   setState("warn", "已断开");
   notifyChar = null;
@@ -400,6 +409,7 @@ function telemetryToRecordLine(tele) {
 }
 
 function acceptTelemetryFrame(tele) {
+  imuVitals.pushSample(tele);
   latestTele = tele;
   latestReceiveTimestampMs = tele.receivedAtMs;
   totalFrameCount += 1;
@@ -588,6 +598,7 @@ async function sendTcycle() {
     } else {
       await writeChar.writeValue(data);
     }
+    imuVitals.startSession('周期指令已发送，按实际数据重新识别采样率');
     alert(`已发送: ${cmd}`);
   } catch (err) {
     console.error(err);

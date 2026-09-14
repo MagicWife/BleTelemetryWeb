@@ -35,6 +35,19 @@
         </div>
         <button id="btnRecord" class="btn btn-secondary btn-wide">开始记录</button>
 
+        <div class="section-title">实时心率 / 呼吸率 · IMU</div>
+        <section class="vitals-panel" aria-label="IMU 实时生命体征">
+          <div class="vitals-heading"><span id="vitalsStatus" role="status">等待蓝牙连接</span><button id="btnResetVitals" class="btn btn-secondary">重新测量</button></div>
+          <div class="vitals-grid">
+            <div class="vital-card heart"><span>心率 HR</span><div><b id="vitalsHR">--</b> <small>bpm</small></div><span>置信度 <strong id="vitalsHRConfidence">--</strong></span></div>
+            <div class="vital-card respiration"><span>呼吸率 RR</span><div><b id="vitalsRR">--</b> <small>次/分</small></div><span>置信度 <strong id="vitalsRRConfidence">--</strong></span></div>
+          </div>
+          <div class="vitals-meta"><span>信号质量 <b id="vitalsQuality">--</b></span><span>实际采样率 <b id="vitalsFs">--</b></span><span>分析窗口 <b id="vitalsWindows">--</b></span><span>测量时长 <b id="vitalsElapsed">--</b></span></div>
+          <p id="vitalsDetail">连续采集约 10 秒开始预测，约 60 秒完成长期轨迹预热。</p>
+          <div class="vitals-chart"><canvas id="vitalsTrend" aria-label="最近五分钟心率和呼吸率趋势"></canvas></div>
+          <p class="vitals-note">佩戴稳定并保持静止。每秒更新；无可靠结果时显示 --。沿用参考算法范围：心率 30–220 bpm，呼吸率 10–30 次/分。</p>
+        </section>
+
         <div class="section-title">设备状态</div>
         <div class="card-list">
           <div class="status-card">
@@ -117,6 +130,7 @@
 
   <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <script src="./imu-vitals.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

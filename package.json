@@ -1,0 +1,7 @@
+{
+  "name": "ble-telemetry-web",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.cjs && npm test --prefix imu"
+  }
+}

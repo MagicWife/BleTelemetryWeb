@@ -1,4 +1,14 @@
 *{box-sizing:border-box}
+.vitals-panel{border:1px solid var(--line);border-radius:22px;padding:16px;margin-bottom:20px;background:rgba(255,255,255,.045)}
+.vitals-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;color:var(--muted)}
+.vitals-heading .btn{font-size:12px;min-height:36px;padding:8px 12px;flex-shrink:0}
+.vitals-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.vital-card{border:1px solid var(--line);border-radius:18px;padding:18px;background:rgba(0,0,0,.12)}
+.vital-card>span{color:var(--muted);font-size:13px}.vital-card b{font-size:clamp(30px,6vw,48px);font-variant-numeric:tabular-nums;line-height:1.6}
+.vital-card small{font-size:13px;color:var(--muted)}.heart b{color:var(--red)}.respiration b{color:var(--green)}
+.vitals-meta{display:flex;flex-wrap:wrap;gap:12px 24px;margin-top:16px;font-size:12px;color:var(--muted)}.vitals-meta b{color:var(--text)}
+.vitals-chart{height:200px;position:relative}.vitals-note,#vitalsDetail{color:var(--muted);font-size:12px;line-height:1.6}
+#vitalsStatus[data-state="running"]{color:var(--green)}#vitalsStatus[data-state="rejected"],#vitalsStatus[data-state="error"]{color:var(--amber)}
 :root{
   --bg1:#06101c;
   --bg2:#0a1830;
