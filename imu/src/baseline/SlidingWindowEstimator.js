@@ -1754,7 +1754,6 @@ function postProcessHeartRate(timeAxis, rawHeartRate, quality, config) {
   for (let i = 1; i < rawHeartRate.length; i++) {
     const previous = output[i - 1];
     const raw = Number.isFinite(rawHeartRate[i]) ? rawHeartRate[i] : previous;
-    const localMedian = Number.isFinite(medians[i]) ? medians[i] : raw;
     const confidence = Number.isFinite(quality[i]) ? quality[i] : 0;
     const dt = Math.max(1e-6, timeAxis[i] - timeAxis[i - 1]);
     const maxStep = Math.min(
@@ -1762,12 +1761,6 @@ function postProcessHeartRate(timeAxis, rawHeartRate, quality, config) {
       config.hrMaxSlopeBpmPerSec * dt
     );
     let candidate = raw;
-    if (
-      confidence < config.hrLowQualityThreshold &&
-      Math.abs(raw - localMedian) > config.hrOutlierGapBpm
-    ) {
-      candidate = localMedian;
-    }
     candidate = previous + clamp(candidate - previous, -maxStep, maxStep);
     const alpha = clamp(
       config.hrPostAlpha * (0.65 + 0.35 * confidence),
@@ -1798,12 +1791,6 @@ function createEstimatorRuntimeState(config = baseConfig) {
     lastRespiratoryRate: 0,
     respiratoryFamilyState: createRespiratoryFamilyState(),
     respiratoryControlAdmissionState: createRespiratoryControlAdmissionState(),
-    qualityGateGapSec: 0,
-    qualityGateResetForCurrentGap: false,
-    qualityRecoveryState: {
-      active: false, type: 'none', candidateHr: NaN,
-      candidateDurationSec: 0, oldAnchorHr: NaN, oldAnchorWeight: 0
-    },
     lowZoneAdmissionState: createLowZoneAdmissionState(),
     sixtySecondTrackState: createSixtySecondTrackState(config),
     selectionArbiterState: createSelectionArbiterState(),
@@ -1859,9 +1846,6 @@ function estimateHRRRTimeSeries(sResp, sHeart, sampleRateHz, options = {}) {
   let lastRespiratoryRate = stateStore.lastRespiratoryRate;
   const respiratoryFamilyState = stateStore.respiratoryFamilyState;
   const respiratoryControlAdmissionState = stateStore.respiratoryControlAdmissionState;
-  let qualityGateGapSec = stateStore.qualityGateGapSec;
-  let qualityGateResetForCurrentGap = stateStore.qualityGateResetForCurrentGap;
-  const qualityRecoveryState = stateStore.qualityRecoveryState;
   const lowZoneAdmissionState = stateStore.lowZoneAdmissionState;
   const sixtySecondTrackState = stateStore.sixtySecondTrackState;
   const selectionArbiterState = stateStore.selectionArbiterState;
@@ -1913,115 +1897,9 @@ function estimateHRRRTimeSeries(sResp, sHeart, sampleRateHz, options = {}) {
         respiratoryControlAdmissionState,
         createRespiratoryControlAdmissionState()
       );
-      qualityRecoveryState.active = false;
-      qualityRecoveryState.type = 'none';
-      qualityRecoveryState.candidateHr = NaN;
-      qualityRecoveryState.candidateDurationSec = 0;
       selectedOutputTrack.length = 0;
       boundaryStateResetDone = true;
     }
-    const qualityGateDecision = config.rawImuQualityGate &&
-      typeof config.rawImuQualityGate.decisionAt === 'function'
-      ? config.rawImuQualityGate.decisionAt(localTimeSec)
-      : { accepted: true, validityStatus: 'not_evaluated', motionStatus: 'not_evaluated', reasons: [] };
-    if (!qualityGateDecision.accepted) {
-      preserveAuthoritativeReliableHistory(
-        authoritativeReliableState,
-        'quality_rejected_preserve_history'
-      );
-      qualityGateGapSec += stepSec;
-      // A short missing interval keeps the hypotheses alive, but their stored
-      // evidence must lose weight for every elapsed second.
-      candidateBeam = candidateBeam.map(track => ({
-        ...track,
-        cumulativeScore: track.cumulativeScore * config.hrTrackMemory,
-        ageSec: track.ageSec + stepSec
-      }));
-      if (baselineBand.mode === 'hold_pending_shift') {
-        baselineBand.holdDurationSec += stepSec;
-      }
-      const longGapResetSec = Math.max(
-        stepSec,
-        config.rawImuQualityLongGapResetSec || 10
-      );
-      let stateResetThisSecond = false;
-      if (!qualityGateResetForCurrentGap && qualityGateGapSec >= longGapResetSec) {
-        qualityRecoveryState.oldAnchorHr = Number.isFinite(previousReliableHr)
-          ? previousReliableHr
-          : (rhythmSwitchState.current?.hrBpm || baselineBand.lastSelected?.hrBpm || NaN);
-        gyroMotionTracks = [];
-        diagnosticCandidateTracks = [];
-        physiologicCandidateTracks = [];
-        candidateBeam = [];
-        Object.assign(baselineBand, createBaselineBandState());
-        Object.assign(rhythmSwitchState, createRhythmSwitchState());
-        Object.assign(lowZoneAdmissionState, createLowZoneAdmissionState());
-        Object.assign(
-          sixtySecondTrackState,
-          createSixtySecondTrackState(config)
-        );
-        Object.assign(selectionArbiterState, createSelectionArbiterState());
-        Object.assign(
-          rawBeamTransitionGuardState,
-          createRawBeamTransitionGuardState()
-        );
-        Object.assign(
-          respiratoryFamilyState,
-          createRespiratoryFamilyState()
-        );
-        Object.assign(
-          respiratoryControlAdmissionState,
-          createRespiratoryControlAdmissionState()
-        );
-        qualityGateResetForCurrentGap = true;
-        stateResetThisSecond = true;
-      }
-      heartRateTimeSeries.push({
-        time_s: timeSec, hr_bpm: NaN, hr_bpm_raw: NaN,
-        quality_score: 0, peak_hz: NaN, peak_mag: NaN,
-        state: 'quality_rejected', candidate_count: 0, cluster_count: 0,
-        support_count: 0, support_windows: '', selection_score: 0,
-        quality_gate_pass: 0,
-        quality_validity_status: qualityGateDecision.validityStatus,
-        quality_motion_status: qualityGateDecision.motionStatus,
-        quality_reject_reasons: qualityGateDecision.reasons.join('|'),
-        quality_gate_gap_sec: qualityGateGapSec,
-        quality_gate_state_reset: stateResetThisSecond ? 1 : 0
-      });
-      respiratoryRateTimeSeries.push({
-        time_s: timeSec, rr_bpm: NaN, quality_score: 0,
-        state: 'quality_rejected'
-      });
-      segments.push({
-        time_s: timeSec, hr_bpm: NaN, hr_bpm_raw: NaN,
-        state: 'quality_rejected', quality_gate_pass: 0
-      });
-      timeAxis.push(timeSec);
-      continue;
-    }
-    const recoveredAfterGapSec = qualityGateGapSec;
-    const recoveredAfterStateReset = qualityGateResetForCurrentGap;
-    const mediumGapMinSec = config.rawImuQualityMediumGapMinSec || 3;
-    if (recoveredAfterGapSec >= mediumGapMinSec) {
-      qualityRecoveryState.active = true;
-      qualityRecoveryState.type = recoveredAfterGapSec >=
-        (config.rawImuQualityLongGapResetSec || 10) ? 'long' : 'medium';
-      qualityRecoveryState.candidateHr = NaN;
-      qualityRecoveryState.candidateDurationSec = 0;
-      if (qualityRecoveryState.type === 'medium') {
-        qualityRecoveryState.oldAnchorHr = Number.isFinite(previousReliableHr)
-          ? previousReliableHr
-          : (rhythmSwitchState.current?.hrBpm || NaN);
-        qualityRecoveryState.oldAnchorWeight = 0.5;
-      } else {
-        qualityRecoveryState.oldAnchorWeight = Math.max(
-          config.rawImuQualityRecoveryMinimumAnchorWeight || 0.15,
-          clamp(0.5 * (30 - recoveredAfterGapSec) / 20, 0, 0.5)
-        );
-      }
-    }
-    qualityGateGapSec = 0;
-    qualityGateResetForCurrentGap = false;
     previousReliableHr = authoritativeReliableState.lastHr;
     // Preserve the validated startup/initial-band behavior exactly. The
     // data-driven correction becomes active only after that anchor exists.
@@ -2232,51 +2110,6 @@ function estimateHRRRTimeSeries(sResp, sHeart, sampleRateHz, options = {}) {
       config
     );
     let selected = respiratoryControlResult.selected;
-    let recoveryConfirmedThisSecond = false;
-    if (qualityRecoveryState.active) {
-      const recoveryPool = selectionClusters.filter(cluster =>
-        qualityRecoveryState.type === 'long'
-          ? cluster.supportWindows?.includes(10) &&
-            cluster.supportWindows?.includes(20)
-          : cluster.supportWindows?.includes(10)
-      );
-      const anchorSigma = config.rawImuQualityRecoveryAnchorSigmaBpm || 20;
-      const recoveryCandidate = recoveryPool.slice().sort((left, right) => {
-        const leftScore = (left.observationScore || left.score || 0) +
-          qualityRecoveryState.oldAnchorWeight * temporalScore(
-            left.hrBpm,
-            qualityRecoveryState.oldAnchorHr,
-            anchorSigma
-          );
-        const rightScore = (right.observationScore || right.score || 0) +
-          qualityRecoveryState.oldAnchorWeight * temporalScore(
-            right.hrBpm,
-            qualityRecoveryState.oldAnchorHr,
-            anchorSigma
-          );
-        return rightScore - leftScore;
-      })[0] || null;
-      if (recoveryCandidate) {
-        const sameTrack = Number.isFinite(qualityRecoveryState.candidateHr) &&
-          Math.abs(recoveryCandidate.hrBpm - qualityRecoveryState.candidateHr) <=
-            (config.rawImuQualityRecoveryMatchBpm || 6);
-        qualityRecoveryState.candidateDurationSec = sameTrack
-          ? qualityRecoveryState.candidateDurationSec + stepSec
-          : stepSec;
-        qualityRecoveryState.candidateHr = recoveryCandidate.hrBpm;
-        selected = recoveryCandidate;
-      } else {
-        qualityRecoveryState.candidateDurationSec = 0;
-        qualityRecoveryState.candidateHr = NaN;
-        selected = null;
-      }
-      if (qualityRecoveryState.candidateDurationSec >=
-          (config.rawImuQualityRecoveryConfirmSec || 5)) {
-        qualityRecoveryState.active = false;
-        recoveryConfirmedThisSecond = true;
-      }
-    }
-    const qualityOutputAllowed = !qualityRecoveryState.active;
     commitRobustCandidateBandSelection(selected, baselineBand, config);
     const scoreOrder = clusters.slice().sort((a, b) => b.score - a.score);
     const bestScore = scoreOrder[0]?.score || 0;
@@ -2452,12 +2285,8 @@ function estimateHRRRTimeSeries(sResp, sHeart, sampleRateHz, options = {}) {
 
     let rawHr = selected?.hrBpm || previousReliableHr;
     if (!Number.isFinite(rawHr) || rawHr <= 0) rawHr = 0;
-    // Track invalidity no longer suppresses output: the original-score branch
-    // is the fallback and therefore remains available every valid second.
-    const trackLockOutputAllowed = true;
-    const outputHr = qualityOutputAllowed && trackLockOutputAllowed ? rawHr : NaN;
     const quality = selected?.quality || 0;
-    if (qualityOutputAllowed && rawHr > 0) {
+    if (rawHr > 0) {
       acceptedHistory.push({ timeSec, hrBpm: rawHr });
       const maximumBaselineHistory = Math.max(1, config.hrBaselineHistoryLength || 120);
       if (acceptedHistory.length > maximumBaselineHistory) {
@@ -2470,7 +2299,6 @@ function estimateHRRRTimeSeries(sResp, sHeart, sampleRateHz, options = {}) {
       authoritativeReliableState,
       config,
       {
-        qualityAccepted: qualityOutputAllowed && trackLockOutputAllowed,
         availableWindowCount: availableWindowSecs.length,
         source: arbitration.mode,
         candidates: clusters
@@ -2480,8 +2308,8 @@ function estimateHRRRTimeSeries(sResp, sHeart, sampleRateHz, options = {}) {
 
     heartRateTimeSeries.push({
       time_s: timeSec,
-      hr_bpm: outputHr,
-      hr_bpm_raw: outputHr,
+      hr_bpm: rawHr,
+      hr_bpm_raw: rawHr,
       quality_score: quality,
       peak_hz: selected?.frequencyHz || 0,
       peak_mag: selected?.amplitude || 0,
@@ -2501,20 +2329,6 @@ function estimateHRRRTimeSeries(sResp, sHeart, sampleRateHz, options = {}) {
       gyro_persistence_score: selected?.gyroPersistenceScore || 0,
       gyro_penalty: selected?.gyroPenalty || 0,
       motion_candidate_type: selected?.motionCandidateType || 'none',
-      quality_gate_pass: qualityOutputAllowed && trackLockOutputAllowed ? 1 : 0,
-      quality_validity_status: qualityGateDecision.validityStatus,
-      quality_motion_status: qualityGateDecision.motionStatus,
-      quality_reject_reasons: !qualityOutputAllowed
-        ? 'recovery_confirmation'
-        : (!trackLockOutputAllowed ? 'checkpoint_track_missing' : ''),
-      quality_gate_gap_sec: recoveredAfterGapSec,
-      quality_gate_state_reset: recoveredAfterStateReset ? 1 : 0,
-      quality_recovery_type: qualityRecoveryState.type,
-      quality_recovery_candidate_hr: qualityRecoveryState.candidateHr || 0,
-      quality_recovery_confirmed_sec: qualityRecoveryState.candidateDurationSec,
-      quality_recovery_old_anchor_hr: qualityRecoveryState.oldAnchorHr || 0,
-      quality_recovery_old_anchor_weight: qualityRecoveryState.oldAnchorWeight,
-      quality_recovery_confirmed: recoveryConfirmedThisSecond ? 1 : 0,
       mature_track_takeover: matureTrackTakeover ? 1 : 0,
       mature_track_takeover_old_hr: matureTrackTakeover?.oldHr || 0,
       mature_track_takeover_new_hr: matureTrackTakeover?.newHr || 0,
@@ -2666,7 +2480,7 @@ function estimateHRRRTimeSeries(sResp, sHeart, sampleRateHz, options = {}) {
     segments.push({
       win_start_s: timeSec - Math.max(...availableWindowSecs),
       win_end_s: timeSec,
-      hr_bpm: outputHr,
+      hr_bpm: rawHr,
       rr_bpm: rr.bpm || lastRespiratoryRate,
       quality_hr: quality,
       quality_rr: rr.quality,
@@ -2681,8 +2495,6 @@ function estimateHRRRTimeSeries(sResp, sHeart, sampleRateHz, options = {}) {
   stateStore.physiologicCandidateTracks = physiologicCandidateTracks;
   stateStore.candidateBeam = candidateBeam;
   stateStore.lastRespiratoryRate = lastRespiratoryRate;
-  stateStore.qualityGateGapSec = qualityGateGapSec;
-  stateStore.qualityGateResetForCurrentGap = qualityGateResetForCurrentGap;
   stateStore.matureTrackTakeover = matureTrackTakeover;
   stateStore.matureRemoteCandidateHr = matureRemoteCandidateHr;
   stateStore.matureRemoteCandidateDurationSec = matureRemoteCandidateDurationSec;
@@ -2695,10 +2507,9 @@ function estimateHRRRTimeSeries(sResp, sHeart, sampleRateHz, options = {}) {
     config
   );
   for (let i = 0; i < heartRateTimeSeries.length; i++) {
-    const rejected = heartRateTimeSeries[i].quality_gate_pass === 0;
-    heartRateTimeSeries[i].hr_bpm = rejected ? NaN : smoothed[i];
-    segments[i].hr_bpm_raw = rejected ? NaN : segments[i].hr_bpm;
-    segments[i].hr_bpm = rejected ? NaN : smoothed[i];
+    heartRateTimeSeries[i].hr_bpm = smoothed[i];
+    segments[i].hr_bpm_raw = segments[i].hr_bpm;
+    segments[i].hr_bpm = smoothed[i];
   }
 
   const validHeartRates = heartRateTimeSeries

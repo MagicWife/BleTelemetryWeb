@@ -156,11 +156,6 @@ function updateAuthoritativeReliableHistory(
   config,
   context = {}
 ) {
-  if (!context.qualityAccepted) {
-    state.lastDecision = 'quality_rejected_preserve_history';
-    resetPending(state);
-    return false;
-  }
   if (!candidate || !Number.isFinite(candidate.hrBpm) || candidate.hrBpm <= 0) {
     state.lastDecision = 'no_finite_final_candidate';
     resetPending(state);
@@ -169,19 +164,6 @@ function updateAuthoritativeReliableHistory(
   if (candidate.heldByRawBeamTransitionGuard === true ||
       candidate.heldBySixtySecondTrack === true) {
     state.lastDecision = 'synthetic_hold_not_reliable';
-    resetPending(state);
-    return false;
-  }
-
-  const minimumQuality = config.hrAuthorityMinimumQuality ?? 0.65;
-  const singleWindowMinimumQuality =
-    config.hrAuthoritySingleWindowMinimumQuality ?? 0.45;
-  const multipleWindow = hasMultipleWindowSupport(candidate);
-  const requiredQuality = multipleWindow
-    ? minimumQuality
-    : singleWindowMinimumQuality;
-  if ((candidate.quality || 0) < requiredQuality) {
-    state.lastDecision = 'insufficient_authority_evidence';
     resetPending(state);
     return false;
   }
@@ -253,12 +235,8 @@ function updateAuthoritativeReliableHistory(
   const nearbyOldCandidate = candidates.some(other => {
     if (!other || Math.abs(other.hrBpm - anchorHr) > nearbyBpm) return false;
     const otherMultiple = hasMultipleWindowSupport(other);
-    const otherMinimumQuality = otherMultiple
-      ? minimumQuality
-      : singleWindowMinimumQuality;
     const singlePersistent = (other.trackConsecutiveSec || 0) >= 3;
-    return (other.quality || 0) >= otherMinimumQuality &&
-      (otherMultiple || singlePersistent);
+    return otherMultiple || singlePersistent;
   });
   const matureTrackSource = source === 'sixty_second_track';
   if (nearbyOldCandidate && !matureTrackSource) {

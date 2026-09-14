@@ -66,7 +66,6 @@
       text('vitalsRR', '--');
       text('vitalsHRConfidence', '--');
       text('vitalsRRConfidence', '--');
-      text('vitalsQuality', '--');
       text('vitalsFs', '--');
       text('vitalsWindows', '--');
       text('vitalsElapsed', '--');
@@ -145,7 +144,7 @@
     createWorker() {
       try {
         const sessionId = this.sessionId;
-        this.worker = new Worker('./imu/dist/imu-vitals.worker.js?v=quality-20260914');
+        this.worker = new Worker('./imu/dist/imu-vitals.worker.js?v=no-quality-gates-20260914');
         this.worker.onmessage = event => {
           const message = event.data || {};
           if (sessionId !== this.sessionId || message.sessionId !== sessionId) return;
@@ -204,30 +203,21 @@
       if (!result || !this.active) return;
       this.lastPredictionAt = Date.now();
       this.predictionCount = Math.round(result.session_elapsed_s * this.sampleRateHz);
-      const quality = result.quality_gate_passed === true;
-      const valid = (value, flag) => quality && flag === true && Number.isFinite(value) && value > 0;
-      const hr = valid(result.HR_bpm, result.heart_valid) ? result.HR_bpm : null;
-      const rr = valid(result.RR_bpm, result.respiratory_valid) ? result.RR_bpm : null;
+      const valid = value => Number.isFinite(value) && value > 0;
+      const hr = valid(result.HR_bpm) ? result.HR_bpm : null;
+      const rr = valid(result.RR_bpm) ? result.RR_bpm : null;
       const confidence = (value, rate) => rate !== null && Number.isFinite(value)
         ? `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%` : '--';
       text('vitalsHR', hr === null ? '--' : hr.toFixed(1));
       text('vitalsRR', rr === null ? '--' : rr.toFixed(1));
       text('vitalsHRConfidence', confidence(result.HR_confidence, hr));
       text('vitalsRRConfidence', confidence(result.RR_confidence, rr));
-      text('vitalsQuality', quality ? '通过' : '未通过');
       text('vitalsWindows', (result.available_windows || []).map(value => `${value}s`).join(' / ') || '--');
       text('vitalsElapsed', `${result.session_elapsed_s.toFixed(0)} s`);
-      const reasonLabels = {
-        invalid_window: '数据无效或几乎完全不变，请检查传感器数据',
-        strong_motion: '运动幅度超过宽松门控阈值',
-        impact: '检测到明显冲击',
-        quality_recovery_pending: '信号恢复中，等待连续正常窗口'
-      };
-      const reasons = (result.quality_reject_reasons || []).map(reason => reasonLabels[reason] || reason).join('；');
-      text('vitalsDetail', reasons || (result.fully_warmed_up ? '长期轨迹预热完成' : `长期轨迹预热 ${Math.round(result.warmup_progress * 100)}%`));
-      this.setState(!quality ? '质量检查未通过，请查看下方原因' : hr === null && rr === null
-        ? '暂无可靠结果，继续采集' : result.fully_warmed_up ? '实时预测中' : '实时预测中 · 长期轨迹预热',
-      quality ? 'running' : 'rejected');
+      text('vitalsDetail', (result.fully_warmed_up ? '长期轨迹预热完成' : `长期轨迹预热 ${Math.round(result.warmup_progress * 100)}%`));
+      this.setState(hr === null && rr === null
+        ? '尚无计算结果，继续采集' : result.fully_warmed_up ? '实时预测中' : '实时预测中 · 长期轨迹预热',
+      'running');
       if (this.chart) {
         [hr, rr].forEach((value, index) => {
           const data = this.chart.data.datasets[index].data;

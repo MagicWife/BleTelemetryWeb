@@ -22,42 +22,6 @@
         windowSec: 20,
         windowSecList: [10, 20, 30],
         stepSec: 1,
-        // Raw-IMU quality gate. Rejected seconds remain on the original timeline as
-        // NaN and must not update HR candidate/trajectory state.
-        rawImuQualityGateEnabled: true,
-        estimatorResetAtGoldStartEnabled: true,
-        estimatorHistoryWarmupSec: 60,
-        rawImuQualityWindowSec: 10,
-        rawImuQualityMinimumRejectRunSec: 1,
-        rawImuQualityAcceptConfirmSec: 2,
-        rawImuQualityLongGapResetSec: 10,
-        rawImuQualityMediumGapMinSec: 3,
-        rawImuQualityRecoveryConfirmSec: 5,
-        rawImuQualityRecoveryMatchBpm: 6,
-        rawImuQualityRecoveryAnchorSigmaBpm: 20,
-        rawImuQualityRecoveryMinimumAnchorWeight: 0.15,
-        rawImuQualityRejectMotionStatuses: ["strong_motion", "impact"],
-        rawImuQualityValidity: {
-          validCoverage: 0.8,
-          invalidCoverage: 0.5,
-          validFiniteRatio: 0.99,
-          invalidFiniteRatio: 0.8,
-          // BLE physical values are quantized to 0.01; repeated static samples are normal.
-          validStuckRatio: 0.95,
-          invalidStuckRatio: 0.995
-        },
-        rawImuQualityMotion: {
-          // Acceleration: m/s²; gyro: deg/s AFTER the rad/s input conversion.
-          // One wire-format gyro step is 0.01 rad/s = 0.573 deg/s.
-          accMadP95: 0.12,
-          accMadP99: 0.35,
-          gyroRmsP95: 1.5,
-          gyroRmsP99: 5,
-          shockP95: 0.15,
-          shockP99: 0.3,
-          // Ignore a few acceleration quantization steps when the window MAD is zero.
-          shockAbsoluteFloor: 0.05
-        },
         // Frequency bands.
         respiratoryBand: [10 / 60, 0.5],
         heartBand: [30 / 60, 220 / 60],
@@ -67,7 +31,6 @@
         respiratoryRateBpmRange: [10, 30],
         respiratoryFamilyExclusionEnabled: false,
         respiratoryFamilyPenaltyEnabled: false,
-        respiratoryFamilyMinimumQuality: 0.75,
         respiratoryFamilyConfirmSec: 8,
         respiratoryFamilyRateMatchBpm: 3,
         respiratoryFamilyMaximumMissingSec: 3,
@@ -78,7 +41,6 @@
         respiratoryFamilyAuthorityProtectionBpm: 6,
         respiratoryFamilyStrongHeartbeatProtection: 0.75,
         respiratoryControlAdmissionEnabled: true,
-        respiratoryControlMinimumQuality: 0.75,
         respiratoryControlMinimumPersistenceSec: 5,
         respiratoryControlHarmonicOrders: [2, 3, 4],
         respiratoryControlStrongDistanceBpm: 1.5,
@@ -131,7 +93,6 @@
         // Quality is only a floor here; persistence, 20/30 s support, score margin
         // and old-anchor visibility provide the actual discrimination. A higher
         // absolute floor incorrectly excludes low-amplitude but valid 7.2 tracks.
-        hrAuthorityMinimumQuality: 0.65,
         hrAuthorityInitialMinimumMargin: 0.05,
         hrAuthorityInitialConfirmSec: 5,
         hrAuthorityLocalConfirmSec: 5,
@@ -141,7 +102,6 @@
         hrAuthorityNearbyBpm: 10,
         hrAuthorityHistorySec: 15,
         hrAuthorityMaximumFiveSecondChangeBpm: 16,
-        hrAuthoritySingleWindowMinimumQuality: 0.45,
         hrAuthorityLocalEvidenceRequired: 4,
         // Confirmed authoritative writes are intentionally limited to the p95
         // physiological envelopes measured from all aligned gold data. Faster
@@ -417,7 +377,6 @@
         hrMaxSlopeBpmPerSec: 10,
         hrHardMaxStepBpm: 20,
         hrPostAlpha: 0.5,
-        hrLowQualityThreshold: 0.35,
         hrOutlierGapBpm: 18,
         // Motion classification.
         staticAccVarThreshold: 0.2,
@@ -1098,150 +1057,6 @@
       module.exports = {
         classifySeriesWindows
       };
-    }
-  });
-
-  // src/quality/RawImuQualityGate.js
-  var require_RawImuQualityGate = __commonJS({
-    "src/quality/RawImuQualityGate.js"(exports, module) {
-      "use strict";
-      function median(values) {
-        const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
-        if (!sorted.length) return NaN;
-        const middle = Math.floor(sorted.length / 2);
-        return sorted.length % 2 ? sorted[middle] : 0.5 * (sorted[middle - 1] + sorted[middle]);
-      }
-      function mad(values) {
-        const center = median(values);
-        return Number.isFinite(center) ? median(values.map((value) => Math.abs(value - center))) : NaN;
-      }
-      function rms(values) {
-        if (!values.length) return NaN;
-        return Math.sqrt(values.reduce((sum, value) => sum + value * value, 0) / values.length);
-      }
-      function classifyValidity(metrics, thresholds) {
-        if (metrics.sampleCoverage < thresholds.invalidCoverage || metrics.finiteRatio < thresholds.invalidFiniteRatio || metrics.stuckRatio > thresholds.invalidStuckRatio) return "invalid";
-        if (metrics.sampleCoverage < thresholds.validCoverage || metrics.finiteRatio < thresholds.validFiniteRatio || metrics.stuckRatio > thresholds.validStuckRatio) return "degraded";
-        return "valid";
-      }
-      function classifyMotion(metrics, thresholds) {
-        const over95 = Number(metrics.accNormMad > thresholds.accMadP95) + Number(metrics.gyroRms > thresholds.gyroRmsP95) + Number(metrics.shockRatio > thresholds.shockP95);
-        if (metrics.shockRatio > thresholds.shockP99) return "impact";
-        if (metrics.accNormMad > thresholds.accMadP99 || metrics.gyroRms > thresholds.gyroRmsP99 || over95 >= 2) return "strong_motion";
-        if (over95 >= 1) return "mild_motion";
-        return "static";
-      }
-      function buildRawImuQualityGate(samples, sampleRateHz, options = {}) {
-        const enabled = options.enabled !== false;
-        const windowSec = options.windowSec || 10;
-        const validityThresholds = options.validityThresholds;
-        const motionThresholds = options.motionThresholds;
-        const rejectedMotion = new Set(options.rejectMotionStatuses || ["strong_motion", "impact"]);
-        const timeQuality = options.timeQuality || {};
-        const minimumRejectRunSec = Math.max(1, options.minimumRejectRunSec || 5);
-        const acceptConfirmSec = Math.max(1, options.acceptConfirmSec || 3);
-        const decisions = [];
-        const durationSec = samples.length / sampleRateHz;
-        const pauseStart = Number.isFinite(timeQuality.detectedPauseAfterSample) ? timeQuality.detectedPauseAfterSample / sampleRateHz : NaN;
-        const pauseEnd = Number.isFinite(pauseStart) && Number.isFinite(timeQuality.detectedPauseSec) ? pauseStart + Math.max(0, timeQuality.detectedPauseSec) : NaN;
-        function evaluateAt(timeSec) {
-          if (!enabled) return { accepted: true, validityStatus: "disabled", motionStatus: "disabled", reasons: [] };
-          const startSec = Math.max(0, timeSec - windowSec);
-          const endSec = Math.min(durationSec, timeSec);
-          const start = Math.max(0, Math.floor(startSec * sampleRateHz));
-          const end = Math.min(samples.length, Math.ceil(endSec * sampleRateHz));
-          const selected = samples.slice(start, end);
-          const finite = selected.filter((sample) => ["ax", "ay", "az", "gx", "gy", "gz"].every((axis) => Number.isFinite(sample[axis])));
-          const expected = Math.max(1, (endSec - startSec) * sampleRateHz);
-          let unavailableSec = 0;
-          if (Number.isFinite(pauseStart) && Number.isFinite(pauseEnd)) {
-            unavailableSec = Math.max(0, Math.min(endSec, pauseEnd) - Math.max(startSec, pauseStart));
-          }
-          const observableCoverage = Math.max(0, selected.length / expected - unavailableSec / Math.max(1e-9, endSec - startSec));
-          let repeated = 0;
-          const jerk = [];
-          for (let index = 1; index < finite.length; index++) {
-            if (["ax", "ay", "az", "gx", "gy", "gz"].every((axis) => finite[index][axis] === finite[index - 1][axis])) repeated++;
-            jerk.push(Math.hypot(
-              finite[index].ax - finite[index - 1].ax,
-              finite[index].ay - finite[index - 1].ay,
-              finite[index].az - finite[index - 1].az
-            ));
-          }
-          const jerkCenter = median(jerk);
-          const jerkMad = mad(jerk);
-          const shockThreshold = Math.max(
-            motionThresholds.shockAbsoluteFloor || 0,
-            jerkCenter + 8 * Math.max(jerkMad, 1e-6)
-          );
-          const metrics = {
-            sampleCoverage: Math.min(1, observableCoverage),
-            finiteRatio: finite.length / Math.max(1, selected.length),
-            stuckRatio: repeated / Math.max(1, finite.length - 1),
-            accNormMad: mad(finite.map((sample) => Math.hypot(sample.ax, sample.ay, sample.az))),
-            gyroRms: rms(finite.map((sample) => Math.hypot(sample.gx, sample.gy, sample.gz))),
-            shockRatio: jerk.length ? jerk.filter((value) => value > shockThreshold).length / jerk.length : 1,
-            unavailableSec
-          };
-          const validityStatus = classifyValidity(metrics, validityThresholds);
-          const motionStatus = classifyMotion(metrics, motionThresholds);
-          const reasons = [
-            validityStatus === "invalid" ? "invalid_window" : "",
-            rejectedMotion.has(motionStatus) ? motionStatus : ""
-          ].filter(Boolean);
-          return { accepted: reasons.length === 0, validityStatus, motionStatus, reasons, metrics };
-        }
-        for (let timeSec = 0; timeSec <= durationSec + 1e-9; timeSec += 1) {
-          decisions.push({ time_s: timeSec, ...evaluateAt(timeSec) });
-        }
-        let rejecting = false;
-        let normalRecoverySec = 0;
-        for (const decision of decisions) {
-          const rawAccepted = decision.accepted;
-          decision.rawReasons = decision.reasons.slice();
-          if (!rawAccepted) {
-            rejecting = true;
-            normalRecoverySec = 0;
-            decision.rejectRunSec = 1;
-            continue;
-          }
-          if (!rejecting) continue;
-          normalRecoverySec++;
-          decision.recoveryNormalSec = normalRecoverySec;
-          if (normalRecoverySec < acceptConfirmSec) {
-            decision.accepted = false;
-            decision.reasons = ["quality_recovery_pending"];
-            decision.rejectRunSec = 0;
-            continue;
-          }
-          rejecting = false;
-          normalRecoverySec = 0;
-        }
-        function decisionAt(timeSec) {
-          if (!enabled) return evaluateAt(timeSec);
-          const index = Math.round(timeSec);
-          return decisions[index] || evaluateAt(timeSec);
-        }
-        const summary = decisions.reduce((result, decision) => {
-          result.total++;
-          if (decision.accepted) result.accepted++;
-          else result.rejected++;
-          result.validity[decision.validityStatus] = (result.validity[decision.validityStatus] || 0) + 1;
-          result.motion[decision.motionStatus] = (result.motion[decision.motionStatus] || 0) + 1;
-          return result;
-        }, {
-          enabled,
-          minimumRejectRunSec,
-          acceptConfirmSec,
-          total: 0,
-          accepted: 0,
-          rejected: 0,
-          validity: {},
-          motion: {}
-        });
-        return { enabled, decisions, summary, decisionAt };
-      }
-      module.exports = { buildRawImuQualityGate };
     }
   });
 
@@ -2314,11 +2129,6 @@
         return true;
       }
       function updateAuthoritativeReliableHistory(candidate, timeSec, state, config, context = {}) {
-        if (!context.qualityAccepted) {
-          state.lastDecision = "quality_rejected_preserve_history";
-          resetPending(state);
-          return false;
-        }
         if (!candidate || !Number.isFinite(candidate.hrBpm) || candidate.hrBpm <= 0) {
           state.lastDecision = "no_finite_final_candidate";
           resetPending(state);
@@ -2326,15 +2136,6 @@
         }
         if (candidate.heldByRawBeamTransitionGuard === true || candidate.heldBySixtySecondTrack === true) {
           state.lastDecision = "synthetic_hold_not_reliable";
-          resetPending(state);
-          return false;
-        }
-        const minimumQuality = config.hrAuthorityMinimumQuality ?? 0.65;
-        const singleWindowMinimumQuality = config.hrAuthoritySingleWindowMinimumQuality ?? 0.45;
-        const multipleWindow = hasMultipleWindowSupport(candidate);
-        const requiredQuality = multipleWindow ? minimumQuality : singleWindowMinimumQuality;
-        if ((candidate.quality || 0) < requiredQuality) {
-          state.lastDecision = "insufficient_authority_evidence";
           resetPending(state);
           return false;
         }
@@ -2392,9 +2193,8 @@
         const nearbyOldCandidate = candidates.some((other) => {
           if (!other || Math.abs(other.hrBpm - anchorHr) > nearbyBpm) return false;
           const otherMultiple = hasMultipleWindowSupport(other);
-          const otherMinimumQuality = otherMultiple ? minimumQuality : singleWindowMinimumQuality;
           const singlePersistent = (other.trackConsecutiveSec || 0) >= 3;
-          return (other.quality || 0) >= otherMinimumQuality && (otherMultiple || singlePersistent);
+          return otherMultiple || singlePersistent;
         });
         const matureTrackSource = source === "sixty_second_track";
         if (nearbyOldCandidate && !matureTrackSource) {
@@ -2501,9 +2301,8 @@
         };
       }
       function updateRespiratoryFamilyState(state, respiratory, stepSec, config) {
-        const minimumQuality = config.respiratoryFamilyMinimumQuality ?? 0.55;
         const matchBpm = config.respiratoryFamilyRateMatchBpm ?? 3;
-        if (!(respiratory.bpm > 0) || respiratory.quality < minimumQuality) {
+        if (!(respiratory.bpm > 0)) {
           state.candidateBpm = NaN;
           state.durationSec = 0;
           state.missingSec += stepSec;
@@ -2565,7 +2364,7 @@
       }
       function applyRespiratoryFamilyPenalty(clusters, state, respiratory, authoritativeHr, config) {
         const summary = { penalized: [], protected: [], family: [] };
-        if (config.respiratoryFamilyPenaltyEnabled !== true || !Number.isFinite(state.stableBpm) || !(state.stableBpm > 0) || respiratory.quality < (config.respiratoryFamilyMinimumQuality ?? 0.75) || state.durationSec < (config.respiratoryFamilyConfirmSec ?? 8)) {
+        if (config.respiratoryFamilyPenaltyEnabled !== true || !Number.isFinite(state.stableBpm) || !(state.stableBpm > 0) || state.durationSec < (config.respiratoryFamilyConfirmSec ?? 8)) {
           return summary;
         }
         const orders = config.respiratoryFamilyHarmonicOrders || [2, 3, 4];
@@ -2616,7 +2415,7 @@
             0
           );
           const confidence = qualityConfidence * distanceConfidence * persistenceConfidence;
-          const extreme = respiratory.quality >= 0.85 && cluster.respiratoryFamilyDistanceBpm <= 1 && state.durationSec >= 10;
+          const extreme = cluster.respiratoryFamilyDistanceBpm <= 1 && state.durationSec >= 10;
           const maximumPenalty = extreme ? config.respiratoryFamilyExtremePenalty ?? 0.12 : config.respiratoryFamilyNormalPenalty ?? 0.08;
           const penalty = maximumPenalty * confidence;
           cluster.respiratoryFamilyPenalty = penalty;
@@ -2704,10 +2503,9 @@
             return result;
           }
         }
-        const qualityMinimum = config.respiratoryControlMinimumQuality ?? 0.75;
         const persistenceMinimum = config.respiratoryControlMinimumPersistenceSec ?? 5;
         const controlRespiratoryBpm = respiratoryState.stableBpm > 0 ? respiratoryState.stableBpm : respiratoryState.candidateBpm;
-        if (!(controlRespiratoryBpm > 0) || respiratory.quality < qualityMinimum || respiratoryState.durationSec < persistenceMinimum) {
+        if (!(controlRespiratoryBpm > 0) || respiratoryState.durationSec < persistenceMinimum) {
           state.lastDecision = "insufficient_respiratory_evidence";
           return result;
         }
@@ -4144,7 +3942,6 @@
         for (let i = 1; i < rawHeartRate.length; i++) {
           const previous = output[i - 1];
           const raw = Number.isFinite(rawHeartRate[i]) ? rawHeartRate[i] : previous;
-          const localMedian = Number.isFinite(medians[i]) ? medians[i] : raw;
           const confidence = Number.isFinite(quality[i]) ? quality[i] : 0;
           const dt = Math.max(1e-6, timeAxis[i] - timeAxis[i - 1]);
           const maxStep = Math.min(
@@ -4152,9 +3949,6 @@
             config.hrMaxSlopeBpmPerSec * dt
           );
           let candidate = raw;
-          if (confidence < config.hrLowQualityThreshold && Math.abs(raw - localMedian) > config.hrOutlierGapBpm) {
-            candidate = localMedian;
-          }
           candidate = previous + clamp(candidate - previous, -maxStep, maxStep);
           const alpha = clamp(
             config.hrPostAlpha * (0.65 + 0.35 * confidence),
@@ -4180,16 +3974,6 @@
           lastRespiratoryRate: 0,
           respiratoryFamilyState: createRespiratoryFamilyState(),
           respiratoryControlAdmissionState: createRespiratoryControlAdmissionState(),
-          qualityGateGapSec: 0,
-          qualityGateResetForCurrentGap: false,
-          qualityRecoveryState: {
-            active: false,
-            type: "none",
-            candidateHr: NaN,
-            candidateDurationSec: 0,
-            oldAnchorHr: NaN,
-            oldAnchorWeight: 0
-          },
           lowZoneAdmissionState: createLowZoneAdmissionState(),
           sixtySecondTrackState: createSixtySecondTrackState(config),
           selectionArbiterState: createSelectionArbiterState(),
@@ -4236,9 +4020,6 @@
         let lastRespiratoryRate = stateStore.lastRespiratoryRate;
         const respiratoryFamilyState = stateStore.respiratoryFamilyState;
         const respiratoryControlAdmissionState = stateStore.respiratoryControlAdmissionState;
-        let qualityGateGapSec = stateStore.qualityGateGapSec;
-        let qualityGateResetForCurrentGap = stateStore.qualityGateResetForCurrentGap;
-        const qualityRecoveryState = stateStore.qualityRecoveryState;
         const lowZoneAdmissionState = stateStore.lowZoneAdmissionState;
         const sixtySecondTrackState = stateStore.sixtySecondTrackState;
         const selectionArbiterState = stateStore.selectionArbiterState;
@@ -4284,118 +4065,9 @@
               respiratoryControlAdmissionState,
               createRespiratoryControlAdmissionState()
             );
-            qualityRecoveryState.active = false;
-            qualityRecoveryState.type = "none";
-            qualityRecoveryState.candidateHr = NaN;
-            qualityRecoveryState.candidateDurationSec = 0;
             selectedOutputTrack.length = 0;
             boundaryStateResetDone = true;
           }
-          const qualityGateDecision = config.rawImuQualityGate && typeof config.rawImuQualityGate.decisionAt === "function" ? config.rawImuQualityGate.decisionAt(localTimeSec) : { accepted: true, validityStatus: "not_evaluated", motionStatus: "not_evaluated", reasons: [] };
-          if (!qualityGateDecision.accepted) {
-            preserveAuthoritativeReliableHistory(
-              authoritativeReliableState,
-              "quality_rejected_preserve_history"
-            );
-            qualityGateGapSec += stepSec;
-            candidateBeam = candidateBeam.map((track) => ({
-              ...track,
-              cumulativeScore: track.cumulativeScore * config.hrTrackMemory,
-              ageSec: track.ageSec + stepSec
-            }));
-            if (baselineBand.mode === "hold_pending_shift") {
-              baselineBand.holdDurationSec += stepSec;
-            }
-            const longGapResetSec = Math.max(
-              stepSec,
-              config.rawImuQualityLongGapResetSec || 10
-            );
-            let stateResetThisSecond = false;
-            if (!qualityGateResetForCurrentGap && qualityGateGapSec >= longGapResetSec) {
-              qualityRecoveryState.oldAnchorHr = Number.isFinite(previousReliableHr) ? previousReliableHr : rhythmSwitchState.current?.hrBpm || baselineBand.lastSelected?.hrBpm || NaN;
-              gyroMotionTracks = [];
-              diagnosticCandidateTracks = [];
-              physiologicCandidateTracks = [];
-              candidateBeam = [];
-              Object.assign(baselineBand, createBaselineBandState());
-              Object.assign(rhythmSwitchState, createRhythmSwitchState());
-              Object.assign(lowZoneAdmissionState, createLowZoneAdmissionState());
-              Object.assign(
-                sixtySecondTrackState,
-                createSixtySecondTrackState(config)
-              );
-              Object.assign(selectionArbiterState, createSelectionArbiterState());
-              Object.assign(
-                rawBeamTransitionGuardState,
-                createRawBeamTransitionGuardState()
-              );
-              Object.assign(
-                respiratoryFamilyState,
-                createRespiratoryFamilyState()
-              );
-              Object.assign(
-                respiratoryControlAdmissionState,
-                createRespiratoryControlAdmissionState()
-              );
-              qualityGateResetForCurrentGap = true;
-              stateResetThisSecond = true;
-            }
-            heartRateTimeSeries.push({
-              time_s: timeSec,
-              hr_bpm: NaN,
-              hr_bpm_raw: NaN,
-              quality_score: 0,
-              peak_hz: NaN,
-              peak_mag: NaN,
-              state: "quality_rejected",
-              candidate_count: 0,
-              cluster_count: 0,
-              support_count: 0,
-              support_windows: "",
-              selection_score: 0,
-              quality_gate_pass: 0,
-              quality_validity_status: qualityGateDecision.validityStatus,
-              quality_motion_status: qualityGateDecision.motionStatus,
-              quality_reject_reasons: qualityGateDecision.reasons.join("|"),
-              quality_gate_gap_sec: qualityGateGapSec,
-              quality_gate_state_reset: stateResetThisSecond ? 1 : 0
-            });
-            respiratoryRateTimeSeries.push({
-              time_s: timeSec,
-              rr_bpm: NaN,
-              quality_score: 0,
-              state: "quality_rejected"
-            });
-            segments.push({
-              time_s: timeSec,
-              hr_bpm: NaN,
-              hr_bpm_raw: NaN,
-              state: "quality_rejected",
-              quality_gate_pass: 0
-            });
-            timeAxis.push(timeSec);
-            continue;
-          }
-          const recoveredAfterGapSec = qualityGateGapSec;
-          const recoveredAfterStateReset = qualityGateResetForCurrentGap;
-          const mediumGapMinSec = config.rawImuQualityMediumGapMinSec || 3;
-          if (recoveredAfterGapSec >= mediumGapMinSec) {
-            qualityRecoveryState.active = true;
-            qualityRecoveryState.type = recoveredAfterGapSec >= (config.rawImuQualityLongGapResetSec || 10) ? "long" : "medium";
-            qualityRecoveryState.candidateHr = NaN;
-            qualityRecoveryState.candidateDurationSec = 0;
-            if (qualityRecoveryState.type === "medium") {
-              qualityRecoveryState.oldAnchorHr = Number.isFinite(previousReliableHr) ? previousReliableHr : rhythmSwitchState.current?.hrBpm || NaN;
-              qualityRecoveryState.oldAnchorWeight = 0.5;
-            } else {
-              qualityRecoveryState.oldAnchorWeight = Math.max(
-                config.rawImuQualityRecoveryMinimumAnchorWeight || 0.15,
-                clamp(0.5 * (30 - recoveredAfterGapSec) / 20, 0, 0.5)
-              );
-            }
-          }
-          qualityGateGapSec = 0;
-          qualityGateResetForCurrentGap = false;
           previousReliableHr = authoritativeReliableState.lastHr;
           config.hrDataDrivenScoringActive = baselineBand.initialized === true;
           const allCandidates = [];
@@ -4580,41 +4252,6 @@
             config
           );
           let selected = respiratoryControlResult.selected;
-          let recoveryConfirmedThisSecond = false;
-          if (qualityRecoveryState.active) {
-            const recoveryPool = selectionClusters.filter(
-              (cluster) => qualityRecoveryState.type === "long" ? cluster.supportWindows?.includes(10) && cluster.supportWindows?.includes(20) : cluster.supportWindows?.includes(10)
-            );
-            const anchorSigma = config.rawImuQualityRecoveryAnchorSigmaBpm || 20;
-            const recoveryCandidate = recoveryPool.slice().sort((left, right) => {
-              const leftScore = (left.observationScore || left.score || 0) + qualityRecoveryState.oldAnchorWeight * temporalScore(
-                left.hrBpm,
-                qualityRecoveryState.oldAnchorHr,
-                anchorSigma
-              );
-              const rightScore = (right.observationScore || right.score || 0) + qualityRecoveryState.oldAnchorWeight * temporalScore(
-                right.hrBpm,
-                qualityRecoveryState.oldAnchorHr,
-                anchorSigma
-              );
-              return rightScore - leftScore;
-            })[0] || null;
-            if (recoveryCandidate) {
-              const sameTrack = Number.isFinite(qualityRecoveryState.candidateHr) && Math.abs(recoveryCandidate.hrBpm - qualityRecoveryState.candidateHr) <= (config.rawImuQualityRecoveryMatchBpm || 6);
-              qualityRecoveryState.candidateDurationSec = sameTrack ? qualityRecoveryState.candidateDurationSec + stepSec : stepSec;
-              qualityRecoveryState.candidateHr = recoveryCandidate.hrBpm;
-              selected = recoveryCandidate;
-            } else {
-              qualityRecoveryState.candidateDurationSec = 0;
-              qualityRecoveryState.candidateHr = NaN;
-              selected = null;
-            }
-            if (qualityRecoveryState.candidateDurationSec >= (config.rawImuQualityRecoveryConfirmSec || 5)) {
-              qualityRecoveryState.active = false;
-              recoveryConfirmedThisSecond = true;
-            }
-          }
-          const qualityOutputAllowed = !qualityRecoveryState.active;
           commitRobustCandidateBandSelection(selected, baselineBand, config);
           const scoreOrder = clusters.slice().sort((a, b) => b.score - a.score);
           const bestScore = scoreOrder[0]?.score || 0;
@@ -4730,10 +4367,8 @@
           }
           let rawHr = selected?.hrBpm || previousReliableHr;
           if (!Number.isFinite(rawHr) || rawHr <= 0) rawHr = 0;
-          const trackLockOutputAllowed = true;
-          const outputHr = qualityOutputAllowed && trackLockOutputAllowed ? rawHr : NaN;
           const quality = selected?.quality || 0;
-          if (qualityOutputAllowed && rawHr > 0) {
+          if (rawHr > 0) {
             acceptedHistory.push({ timeSec, hrBpm: rawHr });
             const maximumBaselineHistory = Math.max(1, config.hrBaselineHistoryLength || 120);
             if (acceptedHistory.length > maximumBaselineHistory) {
@@ -4746,7 +4381,6 @@
             authoritativeReliableState,
             config,
             {
-              qualityAccepted: qualityOutputAllowed && trackLockOutputAllowed,
               availableWindowCount: availableWindowSecs.length,
               source: arbitration.mode,
               candidates: clusters
@@ -4755,8 +4389,8 @@
           previousReliableHr = authoritativeReliableState.lastHr;
           heartRateTimeSeries.push({
             time_s: timeSec,
-            hr_bpm: outputHr,
-            hr_bpm_raw: outputHr,
+            hr_bpm: rawHr,
+            hr_bpm_raw: rawHr,
             quality_score: quality,
             peak_hz: selected?.frequencyHz || 0,
             peak_mag: selected?.amplitude || 0,
@@ -4776,18 +4410,6 @@
             gyro_persistence_score: selected?.gyroPersistenceScore || 0,
             gyro_penalty: selected?.gyroPenalty || 0,
             motion_candidate_type: selected?.motionCandidateType || "none",
-            quality_gate_pass: qualityOutputAllowed && trackLockOutputAllowed ? 1 : 0,
-            quality_validity_status: qualityGateDecision.validityStatus,
-            quality_motion_status: qualityGateDecision.motionStatus,
-            quality_reject_reasons: !qualityOutputAllowed ? "recovery_confirmation" : !trackLockOutputAllowed ? "checkpoint_track_missing" : "",
-            quality_gate_gap_sec: recoveredAfterGapSec,
-            quality_gate_state_reset: recoveredAfterStateReset ? 1 : 0,
-            quality_recovery_type: qualityRecoveryState.type,
-            quality_recovery_candidate_hr: qualityRecoveryState.candidateHr || 0,
-            quality_recovery_confirmed_sec: qualityRecoveryState.candidateDurationSec,
-            quality_recovery_old_anchor_hr: qualityRecoveryState.oldAnchorHr || 0,
-            quality_recovery_old_anchor_weight: qualityRecoveryState.oldAnchorWeight,
-            quality_recovery_confirmed: recoveryConfirmedThisSecond ? 1 : 0,
             mature_track_takeover: matureTrackTakeover ? 1 : 0,
             mature_track_takeover_old_hr: matureTrackTakeover?.oldHr || 0,
             mature_track_takeover_new_hr: matureTrackTakeover?.newHr || 0,
@@ -4909,7 +4531,7 @@
           segments.push({
             win_start_s: timeSec - Math.max(...availableWindowSecs),
             win_end_s: timeSec,
-            hr_bpm: outputHr,
+            hr_bpm: rawHr,
             rr_bpm: rr.bpm || lastRespiratoryRate,
             quality_hr: quality,
             quality_rr: rr.quality,
@@ -4923,8 +4545,6 @@
         stateStore.physiologicCandidateTracks = physiologicCandidateTracks;
         stateStore.candidateBeam = candidateBeam;
         stateStore.lastRespiratoryRate = lastRespiratoryRate;
-        stateStore.qualityGateGapSec = qualityGateGapSec;
-        stateStore.qualityGateResetForCurrentGap = qualityGateResetForCurrentGap;
         stateStore.matureTrackTakeover = matureTrackTakeover;
         stateStore.matureRemoteCandidateHr = matureRemoteCandidateHr;
         stateStore.matureRemoteCandidateDurationSec = matureRemoteCandidateDurationSec;
@@ -4936,10 +4556,9 @@
           config
         );
         for (let i = 0; i < heartRateTimeSeries.length; i++) {
-          const rejected = heartRateTimeSeries[i].quality_gate_pass === 0;
-          heartRateTimeSeries[i].hr_bpm = rejected ? NaN : smoothed[i];
-          segments[i].hr_bpm_raw = rejected ? NaN : segments[i].hr_bpm;
-          segments[i].hr_bpm = rejected ? NaN : smoothed[i];
+          heartRateTimeSeries[i].hr_bpm = smoothed[i];
+          segments[i].hr_bpm_raw = segments[i].hr_bpm;
+          segments[i].hr_bpm = smoothed[i];
         }
         const validHeartRates = heartRateTimeSeries.map((item) => item.hr_bpm).filter((value) => Number.isFinite(value) && value > 0);
         const validRespiratoryRates = respiratoryRateTimeSeries.map((item) => item.rr_bpm).filter((value) => Number.isFinite(value) && value > 0);
@@ -5136,7 +4755,6 @@
       var AttitudeSolverModule = require_AttitudeSolver();
       var { removeGravity } = require_GravityRemoval();
       var { classifySeriesWindows } = require_MotionClassifier();
-      var { buildRawImuQualityGate } = require_RawImuQualityGate();
       var {
         buildRespAndHeartProxies,
         buildGyroMotionProxy
@@ -5308,20 +4926,6 @@
             staticAccVarThreshold: this.config.staticAccVarThreshold,
             staticGyrMagThreshold: this.config.staticGyrMagThreshold
           });
-          const qualityGate = buildRawImuQualityGate(
-            relativeSamples,
-            this.sampleRateHz,
-            {
-              enabled: this.config.rawImuQualityGateEnabled,
-              windowSec: this.config.rawImuQualityWindowSec,
-              minimumRejectRunSec: this.config.rawImuQualityMinimumRejectRunSec,
-              acceptConfirmSec: this.config.rawImuQualityAcceptConfirmSec,
-              rejectMotionStatuses: this.config.rawImuQualityRejectMotionStatuses,
-              validityThresholds: this.config.rawImuQualityValidity,
-              motionThresholds: this.config.rawImuQualityMotion,
-              timeQuality: {}
-            }
-          );
           const linearX = this.frame === "body" ? gravity.linAx : gravity.linAxWorld;
           const linearY = this.frame === "body" ? gravity.linAy : gravity.linAyWorld;
           const linearZ = this.frame === "body" ? gravity.linAz : gravity.linAzWorld;
@@ -5369,7 +4973,6 @@
               gyroMotionSignal: gyroMotion.signal,
               diagnosticHeartAxes: proxies.diagnostic_heart_axes,
               artifactMask: null,
-              rawImuQualityGate: qualityGate,
               stateResetTimeSec: 0,
               windowStates: windows,
               runtimeState: this.estimatorRuntimeState,
@@ -5396,17 +4999,15 @@
           const status = this.getStatus();
           const endedAt = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
           let rawCurrentHeartRate = heart && Number.isFinite(heart.hr_bpm_raw) && heart.hr_bpm_raw > 0 ? heart.hr_bpm_raw : null;
-          const qualityAccepted = heart ? heart.quality_gate_pass !== 0 : false;
           const criticalLowTakeoverApplied = Boolean(
-            this.config.criticalLowHeartTakeoverEnabled === true && qualityAccepted && lowHeartObservation?.shadowWouldAdmit && Number.isFinite(lowHeartObservation.selectedCandidate?.hrBpm)
+            this.config.criticalLowHeartTakeoverEnabled === true && lowHeartObservation?.shadowWouldAdmit && Number.isFinite(lowHeartObservation.selectedCandidate?.hrBpm)
           );
           if (criticalLowTakeoverApplied) {
             rawCurrentHeartRate = lowHeartObservation.selectedCandidate.hrBpm;
           }
           const heartRate = this._stabilizeHeartRate(
             rawCurrentHeartRate,
-            heart?.quality_score || 0,
-            qualityAccepted
+            heart?.quality_score || 0
           );
           const respiratoryRate = respiratory && Number.isFinite(respiratory.rr_bpm) && respiratory.rr_bpm > 0 ? respiratory.rr_bpm : null;
           const result = {
@@ -5428,10 +5029,6 @@
             respiratory_quality: respiratory && Number.isFinite(respiratory.quality_score) ? respiratory.quality_score : 0,
             heart_valid: heartRate !== null,
             respiratory_valid: respiratoryRate !== null,
-            quality_gate_passed: qualityAccepted,
-            quality_validity_status: heart?.quality_validity_status || "not_evaluated",
-            quality_motion_status: heart?.quality_motion_status || segment?.state || "unknown",
-            quality_reject_reasons: heart?.quality_reject_reasons ? heart.quality_reject_reasons.split("|").filter(Boolean) : [],
             motion_state: heart?.state || respiratory?.state || segment?.state || "unknown",
             available_windows: heart?.available_windows ? String(heart.available_windows).split("|").filter(Boolean).map(Number) : [],
             window_start_s: segment?.win_start_s ?? null,
@@ -5495,8 +5092,7 @@
           }
           return Object.assign(values, { timestamp_s: timestampSec });
         }
-        _stabilizeHeartRate(value, confidence, qualityAccepted) {
-          if (!qualityAccepted) return null;
+        _stabilizeHeartRate(value, confidence) {
           if (!Number.isFinite(value) || value <= 0) {
             return Number.isFinite(this.lastStableHeartRate) ? this.lastStableHeartRate : null;
           }
@@ -5514,7 +5110,7 @@
             this.config.hrHardMaxStepBpm || 20,
             (this.config.hrMaxSlopeBpmPerSec || 10) * this.stepSec
           );
-          const target = confidence < (this.config.hrLowQualityThreshold || 0.35) ? median : value;
+          const target = value;
           const limited = this.lastStableHeartRate + Math.max(
             -maximumStep,
             Math.min(maximumStep, target - this.lastStableHeartRate)
@@ -5563,10 +5159,6 @@
           RR_confidence: result.RR_confidence,
           heart_valid: result.heart_valid,
           respiratory_valid: result.respiratory_valid,
-          quality_gate_passed: result.quality_gate_passed,
-          quality_validity_status: result.quality_validity_status,
-          quality_motion_status: result.quality_motion_status,
-          quality_reject_reasons: result.quality_reject_reasons,
           motion_state: result.motion_state,
           available_windows: result.available_windows,
           session_elapsed_s: result.session_elapsed_s,

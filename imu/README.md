@@ -11,8 +11,8 @@
 - 接收三轴加速度 `ax/ay/az` 和三轴陀螺仪 `gx/gy/gz` 实时样本。
 - 完成姿态估计、重力去除和心率/呼吸率信号构建。
 - 使用10秒、20秒和30秒因果窗口生成候选峰。
-- 通过质量门控、候选评分、Beam、权威历史、checkpoint和长期轨迹选择最终结果。
-- 每约1秒输出一次心率、呼吸率、置信度、质量状态和候选峰。
+- 通过候选评分、Beam、权威历史、checkpoint和长期轨迹选择最终结果。
+- 每约1秒输出一次心率、呼吸率、置信度和候选峰。
 - 在 Web Worker 中执行计算，避免阻塞页面、BLE接收和毫米波处理。
 - 连接、断开、清空数据或采样率变化时，独立重置 IMU 实时会话。
 
@@ -26,7 +26,6 @@ web/imu/
 │  ├─ baseline/                    候选峰、Beam、轨迹和仲裁逻辑
 │  ├─ browser/worker-entry.js      浏览器 Worker 消息入口
 │  ├─ imu/                         姿态估计与重力去除
-│  ├─ quality/                     原始 IMU 质量门控
 │  ├─ realtime/                    实时会话适配器
 │  ├─ signal/                      FFT、滤波和信号处理
 │  └─ state/                       运动状态判断
@@ -43,7 +42,7 @@ BLE 实时样本
   → 主程序判定为 live
   → imu-vitals-panel.js
   → imu-vitals.worker.js
-  → 质量门控与 IMU 算法全流程
+  → IMU 算法全流程
   → HR/RR、置信度、候选峰和运行状态
   → 页面实时卡片与趋势图
 ```
@@ -63,12 +62,11 @@ BLE 实时样本
 - `HR_bpm`：预测心率。
 - `RR_bpm`：预测呼吸率。
 - `HR_confidence`、`RR_confidence`：结果置信度。
-- `quality_gate_passed`：质量门控是否通过。
-- `motion_state`：运动/质量状态。
+- `motion_state`：运动状态。
 - `available_windows`：当前可用的10秒、20秒和30秒窗口。
 - `candidates`：当前心率候选峰。
 
-质量门控明确拒绝时，页面显示无效值而不是用0代替。
+当前接入已移除质量检测门控；尚无计算结果时显示空值。
 
 ## 预热与长期状态
 

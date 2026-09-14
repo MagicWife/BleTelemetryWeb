@@ -18,43 +18,6 @@ module.exports = {
   windowSecList: [10, 20, 30],
   stepSec: 1,
 
-  // Raw-IMU quality gate. Rejected seconds remain on the original timeline as
-  // NaN and must not update HR candidate/trajectory state.
-  rawImuQualityGateEnabled: true,
-  estimatorResetAtGoldStartEnabled: true,
-  estimatorHistoryWarmupSec: 60,
-  rawImuQualityWindowSec: 10,
-  rawImuQualityMinimumRejectRunSec: 1,
-  rawImuQualityAcceptConfirmSec: 2,
-  rawImuQualityLongGapResetSec: 10,
-  rawImuQualityMediumGapMinSec: 3,
-  rawImuQualityRecoveryConfirmSec: 5,
-  rawImuQualityRecoveryMatchBpm: 6,
-  rawImuQualityRecoveryAnchorSigmaBpm: 20,
-  rawImuQualityRecoveryMinimumAnchorWeight: 0.15,
-  rawImuQualityRejectMotionStatuses: ['strong_motion', 'impact'],
-  rawImuQualityValidity: {
-    validCoverage: 0.80,
-    invalidCoverage: 0.50,
-    validFiniteRatio: 0.99,
-    invalidFiniteRatio: 0.80,
-    // BLE physical values are quantized to 0.01; repeated static samples are normal.
-    validStuckRatio: 0.95,
-    invalidStuckRatio: 0.995
-  },
-  rawImuQualityMotion: {
-    // Acceleration: m/s²; gyro: deg/s AFTER the rad/s input conversion.
-    // One wire-format gyro step is 0.01 rad/s = 0.573 deg/s.
-    accMadP95: 0.12,
-    accMadP99: 0.35,
-    gyroRmsP95: 1.5,
-    gyroRmsP99: 5,
-    shockP95: 0.15,
-    shockP99: 0.30,
-    // Ignore a few acceleration quantization steps when the window MAD is zero.
-    shockAbsoluteFloor: 0.05
-  },
-
   // Frequency bands.
   respiratoryBand: [10 / 60, 0.5],
   heartBand: [30 / 60, 220 / 60],
@@ -64,7 +27,6 @@ module.exports = {
   respiratoryRateBpmRange: [10, 30],
   respiratoryFamilyExclusionEnabled: false,
   respiratoryFamilyPenaltyEnabled: false,
-  respiratoryFamilyMinimumQuality: 0.75,
   respiratoryFamilyConfirmSec: 8,
   respiratoryFamilyRateMatchBpm: 3,
   respiratoryFamilyMaximumMissingSec: 3,
@@ -75,7 +37,6 @@ module.exports = {
   respiratoryFamilyAuthorityProtectionBpm: 6,
   respiratoryFamilyStrongHeartbeatProtection: 0.75,
   respiratoryControlAdmissionEnabled: true,
-  respiratoryControlMinimumQuality: 0.75,
   respiratoryControlMinimumPersistenceSec: 5,
   respiratoryControlHarmonicOrders: [2, 3, 4],
   respiratoryControlStrongDistanceBpm: 1.5,
@@ -130,7 +91,6 @@ module.exports = {
   // Quality is only a floor here; persistence, 20/30 s support, score margin
   // and old-anchor visibility provide the actual discrimination. A higher
   // absolute floor incorrectly excludes low-amplitude but valid 7.2 tracks.
-  hrAuthorityMinimumQuality: 0.65,
   hrAuthorityInitialMinimumMargin: 0.05,
   hrAuthorityInitialConfirmSec: 5,
   hrAuthorityLocalConfirmSec: 5,
@@ -140,7 +100,6 @@ module.exports = {
   hrAuthorityNearbyBpm: 10,
   hrAuthorityHistorySec: 15,
   hrAuthorityMaximumFiveSecondChangeBpm: 16,
-  hrAuthoritySingleWindowMinimumQuality: 0.45,
   hrAuthorityLocalEvidenceRequired: 4.0,
   // Confirmed authoritative writes are intentionally limited to the p95
   // physiological envelopes measured from all aligned gold data. Faster
@@ -423,7 +382,6 @@ module.exports = {
   hrMaxSlopeBpmPerSec: 10,
   hrHardMaxStepBpm: 20,
   hrPostAlpha: 0.5,
-  hrLowQualityThreshold: 0.35,
   hrOutlierGapBpm: 18,
 
   // Motion classification.

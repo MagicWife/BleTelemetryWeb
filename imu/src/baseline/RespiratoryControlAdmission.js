@@ -88,13 +88,11 @@ function reviewRespiratoryControlAdmission(
       return result;
     }
   }
-  const qualityMinimum = config.respiratoryControlMinimumQuality ?? 0.75;
   const persistenceMinimum = config.respiratoryControlMinimumPersistenceSec ?? 5;
   const controlRespiratoryBpm = respiratoryState.stableBpm > 0
     ? respiratoryState.stableBpm
     : respiratoryState.candidateBpm;
   if (!(controlRespiratoryBpm > 0) ||
-      respiratory.quality < qualityMinimum ||
       respiratoryState.durationSec < persistenceMinimum) {
     state.lastDecision = 'insufficient_respiratory_evidence';
     return result;

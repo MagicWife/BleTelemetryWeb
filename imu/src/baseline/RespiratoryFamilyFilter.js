@@ -81,9 +81,8 @@ function createRespiratoryFamilyState() {
 }
 
 function updateRespiratoryFamilyState(state, respiratory, stepSec, config) {
-  const minimumQuality = config.respiratoryFamilyMinimumQuality ?? 0.55;
   const matchBpm = config.respiratoryFamilyRateMatchBpm ?? 3;
-  if (!(respiratory.bpm > 0) || respiratory.quality < minimumQuality) {
+  if (!(respiratory.bpm > 0)) {
     state.candidateBpm = NaN;
     state.durationSec = 0;
     state.missingSec += stepSec;
@@ -167,7 +166,6 @@ function applyRespiratoryFamilyPenalty(
   const summary = { penalized: [], protected: [], family: [] };
   if (config.respiratoryFamilyPenaltyEnabled !== true ||
       !Number.isFinite(state.stableBpm) || !(state.stableBpm > 0) ||
-      respiratory.quality < (config.respiratoryFamilyMinimumQuality ?? 0.75) ||
       state.durationSec < (config.respiratoryFamilyConfirmSec ?? 8)) {
     return summary;
   }
@@ -224,7 +222,7 @@ function applyRespiratoryFamilyPenalty(
     );
     const confidence = qualityConfidence * distanceConfidence *
       persistenceConfidence;
-    const extreme = respiratory.quality >= 0.85 &&
+    const extreme =
       cluster.respiratoryFamilyDistanceBpm <= 1 &&
       state.durationSec >= 10;
     const maximumPenalty = extreme

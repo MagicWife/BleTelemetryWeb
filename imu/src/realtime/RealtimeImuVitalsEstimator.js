@@ -4,7 +4,6 @@ const baseConfig = require('../../config');
 const AttitudeSolverModule = require('../imu/AttitudeSolver');
 const { removeGravity } = require('../imu/GravityRemoval');
 const { classifySeriesWindows } = require('../state/MotionClassifier');
-const { buildRawImuQualityGate } = require('../quality/RawImuQualityGate');
 const {
   buildRespAndHeartProxies,
   buildGyroMotionProxy
@@ -214,21 +213,6 @@ class RealtimeImuVitalsEstimator {
       staticAccVarThreshold: this.config.staticAccVarThreshold,
       staticGyrMagThreshold: this.config.staticGyrMagThreshold
     });
-    const qualityGate = buildRawImuQualityGate(
-      relativeSamples,
-      this.sampleRateHz,
-      {
-        enabled: this.config.rawImuQualityGateEnabled,
-        windowSec: this.config.rawImuQualityWindowSec,
-        minimumRejectRunSec: this.config.rawImuQualityMinimumRejectRunSec,
-        acceptConfirmSec: this.config.rawImuQualityAcceptConfirmSec,
-        rejectMotionStatuses: this.config.rawImuQualityRejectMotionStatuses,
-        validityThresholds: this.config.rawImuQualityValidity,
-        motionThresholds: this.config.rawImuQualityMotion,
-        timeQuality: {}
-      }
-    );
-
     const linearX = this.frame === 'body' ? gravity.linAx : gravity.linAxWorld;
     const linearY = this.frame === 'body' ? gravity.linAy : gravity.linAyWorld;
     const linearZ = this.frame === 'body' ? gravity.linAz : gravity.linAzWorld;
@@ -280,7 +264,6 @@ class RealtimeImuVitalsEstimator {
         gyroMotionSignal: gyroMotion.signal,
         diagnosticHeartAxes: proxies.diagnostic_heart_axes,
         artifactMask: null,
-        rawImuQualityGate: qualityGate,
         stateResetTimeSec: 0,
         windowStates: windows,
         runtimeState: this.estimatorRuntimeState,
@@ -318,14 +301,8 @@ class RealtimeImuVitalsEstimator {
     let rawCurrentHeartRate = heart && Number.isFinite(heart.hr_bpm_raw) && heart.hr_bpm_raw > 0
       ? heart.hr_bpm_raw
       : null;
-    const qualityAccepted = heart ? heart.quality_gate_pass !== 0 : false;
-    // Stage 3 controlled takeover. The observer never bypasses the raw IMU
-    // quality gate: an explicitly rejected second stays invalid. The switch is
-    // also configuration-gated so the shadow rule can be evaluated offline
-    // before it is allowed to affect production output.
     const criticalLowTakeoverApplied = Boolean(
       this.config.criticalLowHeartTakeoverEnabled === true &&
-      qualityAccepted &&
       lowHeartObservation?.shadowWouldAdmit &&
       Number.isFinite(lowHeartObservation.selectedCandidate?.hrBpm)
     );
@@ -334,8 +311,7 @@ class RealtimeImuVitalsEstimator {
     }
     const heartRate = this._stabilizeHeartRate(
       rawCurrentHeartRate,
-      heart?.quality_score || 0,
-      qualityAccepted
+      heart?.quality_score || 0
     );
     const respiratoryRate = respiratory && Number.isFinite(respiratory.rr_bpm) && respiratory.rr_bpm > 0
       ? respiratory.rr_bpm
@@ -372,12 +348,6 @@ class RealtimeImuVitalsEstimator {
         : 0,
       heart_valid: heartRate !== null,
       respiratory_valid: respiratoryRate !== null,
-      quality_gate_passed: qualityAccepted,
-      quality_validity_status: heart?.quality_validity_status || 'not_evaluated',
-      quality_motion_status: heart?.quality_motion_status || segment?.state || 'unknown',
-      quality_reject_reasons: heart?.quality_reject_reasons
-        ? heart.quality_reject_reasons.split('|').filter(Boolean)
-        : [],
       motion_state: heart?.state || respiratory?.state || segment?.state || 'unknown',
       available_windows: heart?.available_windows
         ? String(heart.available_windows).split('|').filter(Boolean).map(Number)
@@ -447,8 +417,7 @@ class RealtimeImuVitalsEstimator {
     return Object.assign(values, { timestamp_s: timestampSec });
   }
 
-  _stabilizeHeartRate(value, confidence, qualityAccepted) {
-    if (!qualityAccepted) return null;
+  _stabilizeHeartRate(value, confidence) {
     if (!Number.isFinite(value) || value <= 0) {
       return Number.isFinite(this.lastStableHeartRate)
         ? this.lastStableHeartRate
@@ -470,9 +439,7 @@ class RealtimeImuVitalsEstimator {
       this.config.hrHardMaxStepBpm || 20,
       (this.config.hrMaxSlopeBpmPerSec || 10) * this.stepSec
     );
-    const target = confidence < (this.config.hrLowQualityThreshold || 0.35)
-      ? median
-      : value;
+    const target = value;
     const limited = this.lastStableHeartRate + Math.max(
       -maximumStep,
       Math.min(maximumStep, target - this.lastStableHeartRate)

@@ -34,7 +34,6 @@
         predictionCount: predictions.length, sampleRateHz: last?.fs,
         firstPredictionSeconds: predictions[0]?.session_elapsed_s,
         lastPredictionSeconds: last?.session_elapsed_s,
-        qualityPassed: last?.quality_gate_passed,
         displayedHeartRate: document.getElementById('vitalsHR').textContent,
         displayedRespiratoryRate: document.getElementById('vitalsRR').textContent
       };

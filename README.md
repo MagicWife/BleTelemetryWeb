@@ -2,7 +2,7 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 
 # BLE Telemetry Aircraft HUD
 
-已接入 `Animal_detection2/imu-zqy/web/imu` 的实时 IMU 心率与呼吸率算法。连接设备后约 10 秒开始预测，约每秒更新，支持置信度、信号质量状态和趋势图。详见 [IMU 接入说明](./IMU-INTEGRATION.md)。
+已接入 `Animal_detection2/imu-zqy/web/imu` 的实时 IMU 心率与呼吸率算法。连接设备后约 10 秒开始预测，约每秒更新，支持置信度、趋势图（质量门控已移除）。详见 [IMU 接入说明](./IMU-INTEGRATION.md)。
 
 一个基于浏览器的 BLE 遥测监控静态网页，支持：
 

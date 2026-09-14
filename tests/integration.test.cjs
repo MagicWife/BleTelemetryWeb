@@ -95,16 +95,17 @@ test('actual period changes recalibrate; unsupported fs reports an error', () =>
   assert.match(h.elements.get('vitalsStatus').textContent, /采样率不支持/);
 });
 
-test('quality rejection, invalid values, disconnect, and late worker replies clear numbers', () => {
+test('quality flags do not hide finite results; invalid numbers and disconnect clear values', () => {
   const h = harness(), c = h.controller();
   c.startSession(); feed(c, 0, 50);
   const worker = c.worker;
   worker.emit('prediction', prediction);
   assert.equal(h.elements.get('vitalsHR').textContent, '90.0');
   assert.equal(h.elements.get('vitalsRR').textContent, '18.0');
-  worker.emit('prediction', { ...prediction, quality_gate_passed: false });
-  assert.equal(h.elements.get('vitalsHR').textContent, '--');
-  assert.equal(c.chart.data.datasets[0].data.at(-1).y, null);
+  worker.emit('prediction', { ...prediction, quality_gate_passed: false, heart_valid: false, respiratory_valid: false });
+  assert.equal(h.elements.get('vitalsHR').textContent, '90.0');
+  assert.equal(h.elements.get('vitalsRR').textContent, '18.0');
+  assert.equal(c.chart.data.datasets[0].data.at(-1).y, 90);
   worker.emit('prediction', { ...prediction, HR_bpm: null, RR_bpm: NaN });
   assert.equal(h.elements.get('vitalsHR').textContent, '--');
   assert.equal(h.elements.get('vitalsRR').textContent, '--');
@@ -166,7 +167,7 @@ test('fragmented and batched 46-byte Notify frames reach the algorithm only afte
   assert.equal(h.run('imuVitals.active'), false);
 });
 
-test('bundled browser worker matches source estimator with production quality settings', () => {
+test('bundled browser worker matches source estimator without quality gating', () => {
   const { RealtimeImuVitalsEstimator } = require('../imu/src/realtime');
   const options = { sampleRateHz: 50, accelUnit: 'mps2', gyroUnit: 'rad' };
   const source = new RealtimeImuVitalsEstimator(options);
@@ -189,7 +190,7 @@ test('bundled browser worker matches source estimator with production quality se
   const predictions = replies.filter(message => message.type === 'prediction');
   assert.equal(predictions.length, 2);
   const actual = predictions.at(-1).result;
-  for (const key of ['HR_bpm', 'RR_bpm', 'heart_valid', 'respiratory_valid', 'quality_gate_passed', 'session_elapsed_s']) {
+  for (const key of ['HR_bpm', 'RR_bpm', 'heart_valid', 'respiratory_valid', 'session_elapsed_s']) {
     assert.equal(actual[key], expected[key], key);
   }
   assert.ok(Math.abs(source.samples[0].gy - 0.0001 * 180 / Math.PI) < 1e-12, 'radians must convert exactly once');

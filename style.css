@@ -8,7 +8,7 @@
 .vital-card small{font-size:13px;color:var(--muted)}.heart b{color:var(--red)}.respiration b{color:var(--green)}
 .vitals-meta{display:flex;flex-wrap:wrap;gap:12px 24px;margin-top:16px;font-size:12px;color:var(--muted)}.vitals-meta b{color:var(--text)}
 .vitals-chart{height:200px;position:relative}.vitals-note,#vitalsDetail{color:var(--muted);font-size:12px;line-height:1.6}
-#vitalsStatus[data-state="running"]{color:var(--green)}#vitalsStatus[data-state="rejected"],#vitalsStatus[data-state="error"]{color:var(--amber)}
+#vitalsStatus[data-state="running"]{color:var(--green)}#vitalsStatus[data-state="error"]{color:var(--amber)}
 :root{
   --bg1:#06101c;
   --bg2:#0a1830;

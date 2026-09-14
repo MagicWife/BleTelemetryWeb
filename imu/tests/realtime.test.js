@@ -18,8 +18,7 @@ function sampleAt(timeSec, fs) {
 const fs = 50;
 const estimator = new RealtimeImuVitalsEstimator({
   sampleRateHz: fs,
-  replayHistorySec: 70,
-  config: { rawImuQualityGateEnabled: false }
+  replayHistorySec: 70
 });
 assert.strictEqual(estimator.isReady(), false);
 const results = [];
