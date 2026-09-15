@@ -2,9 +2,11 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 
 # BLE Telemetry Aircraft HUD
 
-已接入 `Animal_detection2/imu-zqy/web/imu` 的实时 IMU 心率与呼吸率算法。连接设备后约 10 秒开始预测，约每秒更新，支持置信度、趋势图（质量门控已移除）。详见 [IMU 接入说明](./IMU-INTEGRATION.md)。
-
 一个基于浏览器的 BLE 遥测监控静态网页，支持：
+
+当前本地调试版对应 `CH32V208_BLE_UART_forMotionv2` 工程的42字节v2协议，用于观察磁校正是否有效、磁异常及六轴回退。详细拒绝原因和校正后磁场数值不在v2蓝牙帧内，应同时查看MCU PA9调试串口的 `MAG_DIAG`。
+
+网页保留实时IMU心率与呼吸率估算：连接后自动识别实际采样率，约10秒开始输出、约每秒更新，约60秒完成长期轨迹预热。算法使用v2帧中的三轴加速度和三轴角速度，磁融合状态不作为生命体征输入。详见 [IMU接入说明](./IMU-INTEGRATION.md)。
 
 - Web Bluetooth 连接 BLE 设备
 - 自动匹配 `FFF0 / FFF1 / FFF2`
@@ -12,7 +14,8 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 - 固定长度二进制帧的跨 Notify 拼包与 CRC16 校验
 - 遥测解析与实时显示
 - IMU 温度实时显示与波形
-- QMC5883P 三轴磁场数据显示与实时波形
+- IMU心率、呼吸率、置信度及最近五分钟趋势
+- 磁校正、磁异常、六轴回退及传感器数据过期状态
 - 3D 飞机姿态显示
 - 电压条显示
 - 最近帧缓存
@@ -23,6 +26,8 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 - `index.html`：主页面结构
 - `style.css`：界面样式
 - `app.js`：BLE、遥测解析、姿态显示、CSV 导出等核心逻辑
+- `imu-vitals.js`：BLE遥测到实时生命体征Worker的适配器
+- `imu/`：心率/呼吸率算法源码及浏览器Worker
 
 ## 功能说明
 
@@ -45,17 +50,17 @@ BLE 接收与页面渲染相互独立：所有有效帧均可被记录，实时�
 - 陀螺仪 GX / GY / GZ
 - Roll / Pitch / Yaw
 - 电池电压 V1（PA1）
-- QMC5883P 三轴磁场 MX / MY / MZ（Gauss）
+- 姿态状态字及7个状态位（不再接收三轴磁场）
 - 电量百分比：按 `clamp((电池电压 - 2.5 V) / 1.2 V × 100%, 0%, 100%)` 计算
 - MCU 启动后运行时间
 
-当前 MCU 使用 46 字节、小端序的二进制帧：
+当前网页仅支持 MCU v2 的42字节小端二进制帧，收到v1时提示升级固件：
 
 | 偏移 | 长度 | 字段 | 编码 |
 |---:|---:|---|---|
 | 0 | 2 | 帧头 | `A5 5A` |
-| 2 | 1 | 协议版本 | `01` |
-| 3 | 1 | 总帧长 | `46` |
+| 2 | 1 | 协议版本 | `02` |
+| 3 | 1 | 总帧长 | `42` |
 | 4 | 2 | 序号 | `uint16` |
 | 6 | 6 | MAC | 显示顺序的 6 字节 |
 | 12 | 2 | 温度 | `int16 / 100` °C |
@@ -63,25 +68,40 @@ BLE 接收与页面渲染相互独立：所有有效帧均可被记录，实时�
 | 20 | 6 | GX / GY / GZ | 三个 `int16 / 100` rad/s |
 | 26 | 6 | Roll / Pitch / Yaw | 三个 `int16 / 100` 度 |
 | 32 | 2 | 电池电压 | `uint16 / 1000` V |
-| 34 | 6 | MX / MY / MZ | 三个 `int16 / 1000` Gauss |
-| 40 | 4 | 运行时间 | `uint32` ms |
-| 44 | 2 | 校验 | CRC16-CCITT，覆盖字节 0–43 |
+| 34 | 2 | 状态位 | `uint16` |
+| 36 | 4 | 运行时间 | `uint32` ms |
+| 40 | 2 | 校验 | CRC16-CCITT，覆盖字节 0–39 |
+
+状态位：bit0磁校正有效，bit1磁异常，bit2六轴回退，bit3姿态已初始化，bit4磁数据超时，bit5 IMU过期，bit6磁校准参数启用。未知高位忽略。
+bit1是最近被拒绝的磁数据状态，不代表累计错误数，也不能证明物理上一定存在磁干扰。bit6不是当前航向精度的保证。
 
 ### 4. 姿态显示
 页面集成 Three.js 飞机姿态视图，用于显示 roll / pitch / yaw 的实时变化。
+等待初始化、IMU过期、协议不匹配或整条遥测流超时后暂停动画。六轴回退仍显示姿态，但提示航向可能漂移。
+流超时阈值为max(1秒, 网页最近发送周期的3倍)；此时状态位标注为历史值，不把最后一帧当成实时状态。
+未收到新数据时不重复往波形插入同一采样点。
 
-### 5. 记录 CSV
+### 5. 实时心率和呼吸率
+
+所有通过协议版本、帧长和CRC16检查的v2帧都会把AX/AY/AZ（m/s²）和GX/GY/GZ（rad/s）送入独立Worker。算法根据MCU的序号和`uptime_ms`判断连续性并自动识别采样率；设置新的Tcycle、数据中断、计数器异常或重新连接后会自动开始新测量会话。
+
+心率范围为30～220 bpm，呼吸率范围为10～30次/分。结果属于IMU信号估算，尚未通过当前硬件的真实动物同步标注验证，不能作为医疗诊断。
+
+### 6. 记录 CSV
 点击“开始记录”后，所有通过 CRC 校验的数据都会记录。网页每 5 分钟自动下载一个 CSV 文件，文件生成后立即切换到新的空缓存；点击“停止记录”或蓝牙断开时，会另行下载当前不足 5 分钟的剩余数据。
 
-CSV 时间戳固定采用北京时间（UTC+8），格式为 `YYYY-MM-DD HH:mm:ss.SSS+08:00`。文件中只保存解析后的可读物理量：
+CSV 时间戳固定采用北京时间（UTC+8），格式为 `YYYY-MM-DD HH:mm:ss.SSS+08:00`。文件保存解析后的可读物理量及状态：
 
 - IMU 温度（°C）
 - 三轴加速度（m/s²）
 - 三轴角速度（rad/s）
 - Roll / Pitch / Yaw（°）
 - 电池电压（V）和电量百分比（%）
-- 三轴磁场（Gauss）
 - MCU 启动后运行时间 `uptime_ms`（ms）
+- `attitude_status`（十进制状态字）、`fusion_state`（可读状态描述）
+- `mag_active,mag_rejected,six_axis,attitude_ready,mag_stale,imu_stale,mag_calibrated`（0/1，1表示该位有效）
+
+CSV状态为接收帧携带的设备状态，不额外编造超时采样行。数据过期的帧仍保留原值及其标志，分析时应过滤不可靠姿态。
 
 CSV 不再保存原始十六进制帧、协议版本、帧长、序号、MAC 或 CRC。连续记录时，浏览器可能询问是否允许当前网站自动下载多个文件，需要选择允许。
 
@@ -114,6 +134,12 @@ CSV 不再保存原始十六进制帧、协议版本、帧长、序号、MAC 或
 
 ```bash
 python -m http.server 8000
+```
+
+运行协议适配、生命体征和Worker回归测试：
+
+```bash
+npm test
 ```
 
 online web: https://zhanghengee.github.io/BleTelemetryWeb/

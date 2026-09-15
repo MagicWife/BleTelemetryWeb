@@ -6,6 +6,8 @@
 
 CRC、六轴数值格式检查、采样连续性与断连/超时处理属于数据接收和会话管理，继续生效。约 10 秒开始计算，每秒更新；HR 30–220 bpm、RR 10–30 次/分频带保持不变。
 
+当前适配层读取MCU v2的42字节帧：六轴IMU字段的物理单位和缩放保持不变，运行时间改从字节36～39读取，字节34～35的姿态融合状态不会进入生命体征算法。算法仅在CRC16校验通过后接收样本。
+
 运行：`python -m http.server 8000`；测试：`npm test`；重建：`npm run build --prefix imu`。使用 Chrome/Edge 打开 localhost 或 HTTPS 页面。
 
 算法基于 Animal_detection2 的 imu-zqy/web/imu，参考提交 `6a9763b8198dad0dcb7578da8e76c441e2bc1ce8`。本次修改经过软件回归测试，未通过真实设备标注数据验证准确性。
