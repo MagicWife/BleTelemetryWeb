@@ -34,7 +34,6 @@
           <button id="btnDisconnect" class="btn btn-secondary">断开连接</button>
         </div>
         <button id="btnRecord" class="btn btn-secondary btn-wide">开始记录</button>
-
         <div class="section-title">实时心率 / 呼吸率 · IMU</div>
         <section class="vitals-panel" aria-label="IMU 实时生命体征">
           <div class="vitals-heading"><span id="vitalsStatus" role="status">等待蓝牙连接</span><button id="btnResetVitals" class="btn btn-secondary">重新测量</button></div>
@@ -70,6 +69,19 @@
           <button id="btnSetTcycle" class="btn btn-primary btn-wide">发送到设备</button>
         </div>
 
+        <div class="section-title">姿态融合状态（协议v2）</div>
+        <div class="status-card" aria-live="polite">
+          <div class="row"><span>当前状态</span><b id="tele-fusion" class="pill pill-warn">等待v2遥测数据</b></div>
+          <div class="row"><span>状态字</span><b id="tele-status" class="mono">-</b></div>
+          <div class="row"><span>磁校正有效</span><b id="state-mag-active">-</b></div>
+          <div class="row"><span>磁干扰 / 磁异常</span><b id="state-mag-rejected">-</b></div>
+          <div class="row"><span>六轴回退</span><b id="state-six-axis">-</b></div>
+          <div class="row"><span>姿态已初始化</span><b id="state-ready">-</b></div>
+          <div class="row"><span>磁数据超时</span><b id="state-mag-stale">-</b></div>
+          <div class="row"><span>IMU数据过期</span><b id="state-imu-stale">-</b></div>
+          <div class="row"><span>磁校准参数已启用</span><b id="state-calibrated">-</b></div>
+        </div>
+
         <div class="section-title">核心遥测</div>
         <div class="tele-grid">
           <div class="kv-card"><span>MAC</span><b id="tele-mac">-</b></div>
@@ -87,7 +99,6 @@
               <div id="battery-fill" class="battery-fill"></div>
             </div>
           </div>
-          <div class="kv-card"><span>MX / MY / MZ (Gauss)</span><b id="tele-mag">-</b></div>
           <div class="kv-card"><span>Uptime</span><b id="tele-uptime">-</b></div>
         </div>
 
@@ -97,9 +108,6 @@
           <div class="wave-card"><div class="wave-label">AY (m/s²)</div><div class="wave-canvas-wrap"><canvas id="chartAy"></canvas></div></div>
           <div class="wave-card"><div class="wave-label">AZ (m/s²)</div><div class="wave-canvas-wrap"><canvas id="chartAz"></canvas></div></div>
           <div class="wave-card"><div class="wave-label">IMU Temperature (°C)</div><div class="wave-canvas-wrap"><canvas id="chartTemp"></canvas></div></div>
-          <div class="wave-card"><div class="wave-label">Magnetic X (Gauss)</div><div class="wave-canvas-wrap"><canvas id="chartMx"></canvas></div></div>
-          <div class="wave-card"><div class="wave-label">Magnetic Y (Gauss)</div><div class="wave-canvas-wrap"><canvas id="chartMy"></canvas></div></div>
-          <div class="wave-card"><div class="wave-label">Magnetic Z (Gauss)</div><div class="wave-canvas-wrap"><canvas id="chartMz"></canvas></div></div>
         </div>
 
         <div class="section-title">3D 飞机姿态 HUD</div>
@@ -121,7 +129,7 @@
 
         <div class="section-title">使用提示</div>
         <div class="tip-box">
-          遥测使用 46 字节二进制帧和 CRC16 校验；接收与显示已解耦，实时数值、波形和 3D 姿态按 20 FPS 刷新。开始记录后，每 5 分钟自动下载一个包含解析后物理量和 uptime_ms 的 CSV 并清空该批缓存；请允许浏览器连续下载多个文件。请使用 Chrome / Edge，并确保页面运行在 HTTPS 或 localhost 环境。
+          遥测使用 v2 的 42 字节二进制帧和 CRC16 校验，默认发送周期20 ms。磁场仅在MCU内部融合，网页显示磁校正、磁异常和六轴回退状态。界面按20 FPS刷新；IMU数据过期或遥测中断时暂停姿态动画。开始记录后，每5分钟保存包含物理量、uptime_ms及各状态位的CSV并清空缓存。请允许连续下载多个文件，并使用HTTPS或localhost下的Chrome / Edge。姿态代表项圈模块朝向，不直接等同于动物身体姿态。
         </div>
       </div>
     </section>

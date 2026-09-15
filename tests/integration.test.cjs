@@ -132,35 +132,40 @@ test('silent data loss, worker error and backlog cannot leave stale readings', (
 });
 
 function frame(sequence) {
-  const bytes = new Uint8Array(46), view = new DataView(bytes.buffer);
-  bytes.set([0xA5, 0x5A, 1, 46]);
+  const bytes = new Uint8Array(42), view = new DataView(bytes.buffer);
+  bytes.set([0xA5, 0x5A, 2, 42]);
   view.setUint16(4, sequence, true);
   view.setInt16(18, 981, true);
   view.setInt16(20, 100, true);
-  view.setUint32(40, sequence * 20, true);
+  view.setUint16(34, 0x49, true);
+  view.setUint32(36, sequence * 20, true);
   let crc = 0xFFFF;
-  for (const byte of bytes.subarray(0, 44)) {
+  for (const byte of bytes.subarray(0, 40)) {
     crc ^= byte << 8;
     for (let bit = 0; bit < 8; bit++) crc = ((crc & 0x8000) ? (crc << 1) ^ 0x1021 : crc << 1) & 0xFFFF;
   }
-  view.setUint16(44, crc, true);
+  view.setUint16(40, crc, true);
   return bytes;
 }
 
-test('fragmented and batched 46-byte Notify frames reach the algorithm only after CRC verification', () => {
+test('fragmented and batched v2 42-byte Notify frames reach the algorithm only after CRC verification', () => {
   const h = harness();
   h.run(fs.readFileSync(path.join(root, 'app.js'), 'utf8'));
   h.run('imuVitals.startSession();');
   const good = Array.from({ length: 50 }, (_, i) => frame(i));
   const bad = frame(50); bad[18] ^= 0x01;
-  const stream = new Uint8Array(46 * 51);
-  [...good, bad].forEach((bytes, index) => stream.set(bytes, index * 46));
+  const stream = new Uint8Array(42 * 51);
+  [...good, bad].forEach((bytes, index) => stream.set(bytes, index * 42));
   for (let offset = 0; offset < stream.length; offset += 73) {
     const chunk = stream.slice(offset, offset + 73);
     h.context.event = { target: { value: new DataView(chunk.buffer) } };
     h.run('handleNotify(event)');
   }
   assert.equal(h.run('totalFrameCount'), 50);
+  assert.equal(h.run('latestTele.status'), 0x49);
+  assert.equal(h.run('latestTele.ms'), 980);
+  assert.equal(h.run('latestTele.magActive'), true);
+  assert.equal(h.run('latestTele.mx'), undefined);
   assert.equal(h.run('imuVitals.sampleCount'), 50);
   assert.equal(h.run('imuVitals.worker.messages[1].sample.gx'), 1);
   h.run('onDisconnected()');

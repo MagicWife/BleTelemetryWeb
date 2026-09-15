@@ -5,8 +5,8 @@ const BATTERY_EMPTY_VOLTAGE = 2.5;
 const BATTERY_VOLTAGE_RANGE = 1.2;
 const TELEMETRY_SYNC_0 = 0xA5;
 const TELEMETRY_SYNC_1 = 0x5A;
-const TELEMETRY_VERSION = 0x01;
-const TELEMETRY_FRAME_LENGTH = 46;
+const TELEMETRY_VERSION = 0x02;
+const TELEMETRY_FRAME_LENGTH = 42;
 const DEFAULT_TCYCLE_MS = 20;
 const DISPLAY_INTERVAL_MS = 50; // 20 FPS
 const AIRCRAFT_RENDER_INTERVAL_MS = 50; // 20 FPS
@@ -20,8 +20,9 @@ const RECORD_CSV_HEADER = [
   "gyro_x_rad_s", "gyro_y_rad_s", "gyro_z_rad_s",
   "roll_deg", "pitch_deg", "yaw_deg",
   "battery_voltage_v", "battery_percent",
-  "mag_x_gauss", "mag_y_gauss", "mag_z_gauss",
-  "uptime_ms"
+  "uptime_ms", "attitude_status", "fusion_state",
+  "mag_active", "mag_rejected", "six_axis", "attitude_ready",
+  "mag_stale", "imu_stale", "mag_calibrated"
 ].join(",");
 
 let bleDevice = null;
@@ -36,6 +37,9 @@ let totalFrameCount = 0;
 let lastRenderedSequence = null;
 let isWritingTcycle = false;
 const imuVitals = new window.ImuVitals();
+let currentTcycleMs = DEFAULT_TCYCLE_MS;
+let protocolWarning = "";
+let lastDisplayedTele = null;
 
 let isRecording = false;
 let recordBuffer = [];
@@ -74,7 +78,15 @@ const dom = {
     battery: document.getElementById("tele-battery"),
     batteryTrack: document.getElementById("battery-track"),
     batteryFill: document.getElementById("battery-fill"),
-    mag: document.getElementById("tele-mag"),
+    fusion: document.getElementById("tele-fusion"),
+    status: document.getElementById("tele-status"),
+    magActive: document.getElementById("state-mag-active"),
+    magRejected: document.getElementById("state-mag-rejected"),
+    sixAxis: document.getElementById("state-six-axis"),
+    ready: document.getElementById("state-ready"),
+    magStale: document.getElementById("state-mag-stale"),
+    imuStale: document.getElementById("state-imu-stale"),
+    calibrated: document.getElementById("state-calibrated"),
     uptime: document.getElementById("tele-uptime"),
   },
 };
@@ -161,9 +173,9 @@ async function connectBle() {
       if (uuid.includes(CHAR_WRITE)) writeChar = ch;
     }
     if (!notifyChar) throw new Error("未找到 FFF1 notify characteristic");
-
     rxBuffer = new Uint8Array(0);
     imuVitals.startSession();
+
     notifyChar.addEventListener("characteristicvaluechanged", handleNotify);
     await notifyChar.startNotifications();
 
@@ -192,6 +204,9 @@ function onDisconnected() {
   latestReceiveTimestampMs = 0;
   totalFrameCount = 0;
   lastRenderedSequence = null;
+  lastDisplayedTele = null;
+  protocolWarning = "";
+  renderFusionStatus();
   rxBuffer = new Uint8Array(0);
   dom.frameCount.textContent = "0";
   dom.lastReceive.textContent = "-";
@@ -337,6 +352,8 @@ function appendTelemetryBytes(chunk) {
     const version = rxBuffer[2];
     const frameLength = rxBuffer[3];
     if (version !== TELEMETRY_VERSION || frameLength !== TELEMETRY_FRAME_LENGTH) {
+      if (version === 1 && frameLength === 46)
+        protocolWarning = "收到旧版v1数据，请烧录v2固件";
       rxBuffer = rxBuffer.slice(1);
       continue;
     }
@@ -374,7 +391,8 @@ function bytesToHex(bytes) {
 }
 
 function parseTelemetryFrame(frame) {
-  if (frame.length !== TELEMETRY_FRAME_LENGTH) return null;
+  if (frame.length !== TELEMETRY_FRAME_LENGTH || frame[0] !== TELEMETRY_SYNC_0 ||
+      frame[1] !== TELEMETRY_SYNC_1 || frame[2] !== TELEMETRY_VERSION || frame[3] !== TELEMETRY_FRAME_LENGTH) return null;
   const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
   const scaleI16 = (offset, scale) => view.getInt16(offset, true) / scale;
   const mac = Array.from(frame.subarray(6, 12), byte => byte.toString(16).padStart(2, "0"))
@@ -392,9 +410,9 @@ function parseTelemetryFrame(frame) {
     gx: scaleI16(20, 100), gy: scaleI16(22, 100), gz: scaleI16(24, 100),
     roll: scaleI16(26, 100), pitch: scaleI16(28, 100), yaw: scaleI16(30, 100),
     v1: batteryVoltage,
-    mx: scaleI16(34, 1000), my: scaleI16(36, 1000), mz: scaleI16(38, 1000),
+    ...decodeAttitudeStatus(view.getUint16(34, true)),
     battery: voltageToBatteryPercent(batteryVoltage),
-    ms: view.getUint32(40, true)
+    ms: view.getUint32(36, true)
   };
 }
 
@@ -404,12 +422,15 @@ function telemetryToRecordLine(tele) {
     tele.tmp.toFixed(2), tele.ax.toFixed(2), tele.ay.toFixed(2), tele.az.toFixed(2),
     tele.gx.toFixed(2), tele.gy.toFixed(2), tele.gz.toFixed(2), tele.roll.toFixed(2),
     tele.pitch.toFixed(2), tele.yaw.toFixed(2), tele.v1.toFixed(3), tele.battery.toFixed(1),
-    tele.mx.toFixed(3), tele.my.toFixed(3), tele.mz.toFixed(3), tele.ms
+    tele.ms, tele.status, fusionState(tele).text,
+    Number(tele.magActive), Number(tele.magRejected), Number(tele.sixAxis),
+    Number(tele.ready), Number(tele.magStale), Number(tele.imuStale), Number(tele.calibrated)
   ].map(csvEscape).join(",");
 }
 
 function acceptTelemetryFrame(tele) {
   imuVitals.pushSample(tele);
+  protocolWarning = "";
   latestTele = tele;
   latestReceiveTimestampMs = tele.receivedAtMs;
   totalFrameCount += 1;
@@ -445,11 +466,45 @@ function renderTelemetry(tele) {
     : batteryPercent <= 50
       ? "var(--amber)"
       : "var(--green)";
-  dom.tele.mag.textContent = `${tele.mx.toFixed(3)} / ${tele.my.toFixed(3)} / ${tele.mz.toFixed(3)} G`;
   dom.tele.uptime.textContent = `${tele.ms} ms`;
   dom.hudRoll.textContent = `${tele.roll.toFixed(1)}°`;
   dom.hudPitch.textContent = `${tele.pitch.toFixed(1)}°`;
   dom.hudYaw.textContent = `${tele.yaw.toFixed(1)}°`;
+}
+
+function decodeAttitudeStatus(status) {
+  return { status, magActive: !!(status & 1), magRejected: !!(status & 2),
+    sixAxis: !!(status & 4), ready: !!(status & 8), magStale: !!(status & 16),
+    imuStale: !!(status & 32), calibrated: !!(status & 64) };
+}
+
+function fusionState(tele) {
+  if (!tele.ready) return { text: "等待姿态初始化", kind: "warn" };
+  if (tele.imuStale) return { text: "IMU数据过期，姿态无效", kind: "danger" };
+  if (tele.magActive) return { text: "磁校正有效 · 九轴融合", kind: "ok" };
+  if (tele.magRejected) return { text: "磁干扰/磁异常 · 六轴回退", kind: "warn" };
+  if (tele.magStale) return { text: "磁数据超时 · 六轴回退", kind: "warn" };
+  if (tele.sixAxis) return { text: "六轴融合 · 航向可能漂移", kind: "warn" };
+  return { text: "融合状态未知", kind: "warn" };
+}
+
+function renderFusionStatus(now = Date.now()) {
+  const tele = latestTele;
+  const stale = !!tele && now - latestReceiveTimestampMs > Math.max(1000, currentTcycleMs * 3);
+  const state = protocolWarning ? { text: protocolWarning, kind: "danger" }
+    : !tele ? { text: "等待v2遥测数据", kind: "warn" }
+    : stale ? { text: "遥测中断 · 显示已过期", kind: "danger" } : fusionState(tele);
+  dom.tele.fusion.textContent = state.text;
+  dom.tele.fusion.className = `pill pill-${state.kind}`;
+  dom.tele.status.textContent = tele ? `0x${tele.status.toString(16).padStart(4,"0").toUpperCase()}${stale ? "（最后一帧）" : ""}` : "-";
+  for (const key of ["magActive","magRejected","sixAxis","ready","magStale","imuStale","calibrated"])
+    dom.tele[key].textContent = !tele ? "-" : `${tele[key] ? "是" : "否"}${stale ? "（历史）" : ""}`;
+  const usable = !!tele && !protocolWarning && !stale && tele.ready && !tele.imuStale;
+  if (aircraftView.setPaused) aircraftView.setPaused(!usable);
+  if (!usable) {
+    dom.hudRoll.textContent = dom.hudPitch.textContent = dom.hudYaw.textContent = "--";
+  }
+  return usable;
 }
 
 // ===== Wave Charts =====
@@ -493,9 +548,6 @@ function initWaveCharts() {
   waveCharts.ay = new Chart(document.getElementById('chartAy'), makeCfg('AY', '#37d29f'));
   waveCharts.az = new Chart(document.getElementById('chartAz'), makeCfg('AZ', '#ffbe5c'));
   waveCharts.tmp = new Chart(document.getElementById('chartTemp'), makeCfg('Temperature', '#56c7ff'));
-  waveCharts.mx = new Chart(document.getElementById('chartMx'), makeCfg('Magnetic X', '#4dd0e1'));
-  waveCharts.my = new Chart(document.getElementById('chartMy'), makeCfg('Magnetic Y', '#f48fb1'));
-  waveCharts.mz = new Chart(document.getElementById('chartMz'), makeCfg('Magnetic Z', '#dce775'));
 }
 
 function pushWaveSample(tele) {
@@ -506,9 +558,6 @@ function pushWaveSample(tele) {
     ay: tele.ay || 0,
     az: tele.az || 0,
     tmp: tele.tmp || 0,
-    mx: tele.mx || 0,
-    my: tele.my || 0,
-    mz: tele.mz || 0,
   });
   const cutoff = now - WAVE_WINDOW_MS;
   while (waveBuffer.length && waveBuffer[0].t < cutoff) waveBuffer.shift();
@@ -519,7 +568,7 @@ function pushWaveSample(tele) {
 }
 
 function renderWaveCharts() {
-  for (const key of ['ax', 'ay', 'az', 'tmp', 'mx', 'my', 'mz']) {
+  for (const key of ['ax', 'ay', 'az', 'tmp']) {
     const ch = waveCharts[key];
     ch.data.labels = waveBuffer.map(() => '');
     ch.data.datasets[0].data = waveBuffer.map(d => d[key]);
@@ -556,13 +605,17 @@ function renderFrames() {
 
 function renderDisplayFrame() {
   window.setTimeout(renderDisplayFrame, DISPLAY_INTERVAL_MS);
-  if (!latestTele) return;
+  if (!latestTele) { renderFusionStatus(); return; }
 
   const tele = latestTele;
 
   renderTelemetry(tele);
-  pushWaveSample(tele);
-  updateAircraftAttitude(tele);
+  const usable = renderFusionStatus();
+  if (tele !== lastDisplayedTele) {
+    pushWaveSample(tele);
+    lastDisplayedTele = tele;
+  }
+  if (usable) updateAircraftAttitude(tele);
   dom.frameCount.textContent = String(totalFrameCount);
   dom.lastReceive.textContent = latestReceiveTimestampMs
     ? formatBeijingTime(latestReceiveTimestampMs)
@@ -598,6 +651,7 @@ async function sendTcycle() {
     } else {
       await writeChar.writeValue(data);
     }
+    currentTcycleMs = ms;
     imuVitals.startSession('周期指令已发送，按实际数据重新识别采样率');
     alert(`已发送: ${cmd}`);
   } catch (err) {
@@ -796,11 +850,13 @@ camera.lookAt(0, 0, 0);
   }
 
   let lastAircraftRender = performance.now();
+  let paused = true;
   function animate() {
     window.setTimeout(animate, AIRCRAFT_RENDER_INTERVAL_MS);
     const timestamp = performance.now();
     const deltaSeconds = Math.min((timestamp - lastAircraftRender) / 1000, 0.25);
     lastAircraftRender = timestamp;
+    if (paused) return;
     const t = timestamp / 1000;
 
     currentQuat.slerp(targetQuat, 1 - Math.exp(-8 * deltaSeconds));
@@ -809,12 +865,13 @@ camera.lookAt(0, 0, 0);
     glowL.material.opacity = 0.48 + 0.16 * Math.sin(t * 3.2);
     glowR.material.opacity = 0.48 + 0.16 * Math.sin(t * 3.2 + 1.2);
 
-    aircraft.rotation.y = 0.06 * Math.sin(t * 0.9);
+    aircraft.rotation.y = 0;
     renderer.render(scene, camera);
   }
   window.setTimeout(animate, AIRCRAFT_RENDER_INTERVAL_MS);
 
-  return { setAttitude };
+  renderer.render(scene, camera);
+  return { setAttitude, setPaused: value => { paused = value; } };
 }
 
 const aircraftView = createAircraftHUD(dom.aircraft3d);
