@@ -195,15 +195,21 @@ async function autoSearchCityUDevices() {
     scheduleAutoSearch();
     return;
   }
-  if (!navigator.bluetooth || typeof navigator.bluetooth.getDevices !== "function") {
-    setState("warn", "请点击连接并授权 CityU 设备");
-    return;
-  }
 
   try {
     setState("warn", "自动搜索 CityU 设备...");
-    const grantedDevices = await navigator.bluetooth.getDevices();
-    const candidates = grantedDevices.filter(isCityUDevice);
+    const candidates = isCityUDevice(bleDevice) ? [bleDevice] : [];
+    if (navigator.bluetooth && typeof navigator.bluetooth.getDevices === "function") {
+      try {
+        const grantedDevices = await navigator.bluetooth.getDevices();
+        for (const device of grantedDevices.filter(isCityUDevice)) {
+          const alreadyAdded = candidates.some(candidate => candidate === device || candidate.id === device.id);
+          if (!alreadyAdded) candidates.push(device);
+        }
+      } catch (err) {
+        console.warn("读取已授权蓝牙设备失败，将尝试重连上次设备", err);
+      }
+    }
     if (!candidates.length) {
       setState("warn", "请点击连接并授权 CityU 设备");
       return;

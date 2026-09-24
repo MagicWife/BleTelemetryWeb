@@ -172,7 +172,7 @@ test('fragmented and batched v2 42-byte Notify frames reach the algorithm only a
   assert.equal(h.run('imuVitals.active'), false);
 });
 
-test('CityU devices are filtered, reconnected after signal loss, and not reconnected after manual disconnect', async () => {
+test('CityU devices are filtered, retained-device reconnect works without getDevices, and manual disconnect stops it', async () => {
   const h = harness();
   h.run(fs.readFileSync(path.join(root, 'app.js'), 'utf8'));
 
@@ -231,6 +231,7 @@ test('CityU devices are filtered, reconnected after signal loss, and not reconne
   gatt.connected = false;
   listeners.get('gattserverdisconnected')({ target: device });
   assert.equal([...scheduled.values()][0].delay, 3000);
+  delete h.context.navigator.bluetooth.getDevices;
   await h.run('autoSearchCityUDevices()');
   assert.equal(connectCount, 2);
   assert.equal(h.elements.get('deviceName').textContent, 'CityU-C1-01');
