@@ -8,7 +8,8 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 
 网页保留实时IMU心率与呼吸率估算：连接后自动识别实际采样率，约10秒开始输出、约每秒更新，约60秒完成长期轨迹预热。算法使用v2帧中的三轴加速度和三轴角速度，磁融合状态不作为生命体征输入。详见 [IMU接入说明](./IMU-INTEGRATION.md)。
 
-- Web Bluetooth 连接 BLE 设备
+- Web Bluetooth 连接名称以 `CityU` 开头的 BLE 设备
+- 页面启动或意外掉线后，自动搜索并连接已授权的 `CityU*` 设备
 - 自动匹配 `FFF0 / FFF1 / FFF2`
 - Notify 数据接收
 - 固定长度二进制帧的跨 Notify 拼包与 CRC16 校验
@@ -32,7 +33,9 @@ online web: https://github.com/MagicWife/BleTelemetryWeb/
 ## 功能说明
 
 ### 1. 蓝牙连接
-点击“连接蓝牙”后，网页会调用浏览器的 Web Bluetooth 接口搜索并连接 BLE 设备。
+网页在未连接时会自动搜索浏览器已经授权、名称以 `CityU` 开头的 BLE 设备，找到后立即连接；连接成功后停止搜索。意外掉线后会每 3 秒重新搜索并尝试连接。点击“断开连接”会同时暂停自动重连，再次点击“连接蓝牙”会恢复。
+
+浏览器出于安全限制，首次使用某台设备时必须由用户点击“连接蓝牙”，并在系统设备选择框中授权。设备选择框只显示名称以 `CityU` 开头的设备；授权过一次后，后续打开页面可以自动连接该设备。
 
 发送周期参数 `Tcycle` 的页面默认值为 20 ms。
 

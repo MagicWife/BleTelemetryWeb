@@ -172,6 +172,75 @@ test('fragmented and batched v2 42-byte Notify frames reach the algorithm only a
   assert.equal(h.run('imuVitals.active'), false);
 });
 
+test('CityU devices are filtered, reconnected after signal loss, and not reconnected after manual disconnect', async () => {
+  const h = harness();
+  h.run(fs.readFileSync(path.join(root, 'app.js'), 'utf8'));
+
+  const scheduled = new Map();
+  let nextTimerId = 1;
+  h.context.setTimeout = h.context.window.setTimeout = (callback, delay) => {
+    const id = nextTimerId++;
+    scheduled.set(id, { callback, delay });
+    return id;
+  };
+  h.context.clearTimeout = h.context.window.clearTimeout = id => scheduled.delete(id);
+  h.run('stopAutoSearch()');
+
+  const listeners = new Map();
+  const notify = {
+    uuid: '0000fff1-0000-1000-8000-00805f9b34fb',
+    addEventListener() {},
+    async startNotifications() {}
+  };
+  const write = { uuid: '0000fff2-0000-1000-8000-00805f9b34fb' };
+  const service = {
+    uuid: '0000fff0-0000-1000-8000-00805f9b34fb',
+    async getCharacteristics() { return [notify, write]; }
+  };
+  let connectCount = 0;
+  const gatt = {
+    connected: false,
+    async connect() { this.connected = true; connectCount++; return this; },
+    async getPrimaryServices() { return [service]; },
+    disconnect() {
+      this.connected = false;
+      const listener = listeners.get('gattserverdisconnected');
+      if (listener) listener({ target: device });
+    }
+  };
+  const device = {
+    name: 'CityU-C1-01', id: 'cityu-01', gatt,
+    addEventListener(type, listener) { listeners.set(type, listener); },
+    removeEventListener(type, listener) {
+      if (listeners.get(type) === listener) listeners.delete(type);
+    }
+  };
+  let requestOptions;
+  h.context.navigator.bluetooth = {
+    async requestDevice(options) { requestOptions = options; return device; },
+    async getDevices() { return [{ name: 'Other-device' }, device]; }
+  };
+
+  await h.run('connectBle()');
+  assert.equal(requestOptions.filters.length, 1);
+  assert.equal(requestOptions.filters[0].namePrefix, 'CityU');
+  assert.equal(connectCount, 1);
+  assert.equal(h.elements.get('btState').textContent, '已连接');
+  assert.equal(scheduled.size, 0, 'search timer must stop after connection');
+
+  gatt.connected = false;
+  listeners.get('gattserverdisconnected')({ target: device });
+  assert.equal([...scheduled.values()][0].delay, 3000);
+  await h.run('autoSearchCityUDevices()');
+  assert.equal(connectCount, 2);
+  assert.equal(h.elements.get('deviceName').textContent, 'CityU-C1-01');
+  assert.equal(scheduled.size, 0, 'reconnect must cancel the pending search');
+
+  await h.run('disconnectBle()');
+  assert.equal(h.run('autoConnectEnabled'), false);
+  assert.equal(scheduled.size, 0, 'manual disconnect must pause automatic reconnect');
+});
+
 test('bundled browser worker matches source estimator without quality gating', () => {
   const { RealtimeImuVitalsEstimator } = require('../imu/src/realtime');
   const options = { sampleRateHz: 50, accelUnit: 'mps2', gyroUnit: 'rad' };

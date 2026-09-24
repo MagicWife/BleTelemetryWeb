@@ -1,6 +1,8 @@
 const SERVICE_HINT = "fff0";
 const CHAR_NOTIFY = "fff1";
 const CHAR_WRITE = "fff2";
+const DEVICE_NAME_PREFIX = "CityU";
+const AUTO_CONNECT_RETRY_MS = 3000;
 const BATTERY_EMPTY_VOLTAGE = 2.5;
 const BATTERY_VOLTAGE_RANGE = 1.2;
 const TELEMETRY_SYNC_0 = 0xA5;
@@ -29,6 +31,9 @@ let bleDevice = null;
 let gattServer = null;
 let notifyChar = null;
 let writeChar = null;
+let autoConnectEnabled = true;
+let autoConnectTimerId = null;
+let connectionAttemptInProgress = false;
 let rxBuffer = new Uint8Array(0);
 let frames = [];
 let latestTele = null;
@@ -144,12 +149,96 @@ async function connectBle() {
     alert("当前浏览器不支持 Web Bluetooth，请使用 Chrome / Edge。");
     return;
   }
+
+  autoConnectEnabled = true;
+  stopAutoSearch();
+  if (connectionAttemptInProgress) return;
+
   try {
     setState("warn", "请求设备中...");
-    bleDevice = await navigator.bluetooth.requestDevice({
-      acceptAllDevices: true,
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: DEVICE_NAME_PREFIX }],
       optionalServices: [0xfff0]
     });
+    await connectToDevice(device);
+  } catch (err) {
+    imuVitals.reset("蓝牙连接失败");
+    console.error(err);
+    setState("warn", "等待 CityU 设备");
+    scheduleAutoSearch();
+    if (err && err.name !== "NotFoundError") alert(err.message || String(err));
+  }
+}
+
+function isCityUDevice(device) {
+  return Boolean(device && typeof device.name === "string" && device.name.startsWith(DEVICE_NAME_PREFIX));
+}
+
+function stopAutoSearch() {
+  if (autoConnectTimerId !== null) {
+    clearTimeout(autoConnectTimerId);
+    autoConnectTimerId = null;
+  }
+}
+
+function scheduleAutoSearch(delayMs = AUTO_CONNECT_RETRY_MS) {
+  if (!autoConnectEnabled || (gattServer && gattServer.connected) || autoConnectTimerId !== null) return;
+  autoConnectTimerId = window.setTimeout(() => {
+    autoConnectTimerId = null;
+    autoSearchCityUDevices();
+  }, delayMs);
+}
+
+async function autoSearchCityUDevices() {
+  if (!autoConnectEnabled || (gattServer && gattServer.connected)) return;
+  if (connectionAttemptInProgress) {
+    scheduleAutoSearch();
+    return;
+  }
+  if (!navigator.bluetooth || typeof navigator.bluetooth.getDevices !== "function") {
+    setState("warn", "请点击连接并授权 CityU 设备");
+    return;
+  }
+
+  try {
+    setState("warn", "自动搜索 CityU 设备...");
+    const grantedDevices = await navigator.bluetooth.getDevices();
+    const candidates = grantedDevices.filter(isCityUDevice);
+    if (!candidates.length) {
+      setState("warn", "请点击连接并授权 CityU 设备");
+      return;
+    }
+
+    for (const device of candidates) {
+      try {
+        await connectToDevice(device);
+        return;
+      } catch (err) {
+        console.warn(`自动连接 ${device.name || device.id || "CityU 设备"} 失败`, err);
+      }
+    }
+    setState("warn", "等待 CityU 设备");
+  } catch (err) {
+    console.warn("自动搜索 CityU 设备失败", err);
+    setState("warn", "自动搜索失败，稍后重试");
+  } finally {
+    scheduleAutoSearch();
+  }
+}
+
+async function connectToDevice(device) {
+  if (!isCityUDevice(device)) throw new Error(`设备名称必须以 ${DEVICE_NAME_PREFIX} 开头`);
+  if (connectionAttemptInProgress) throw new Error("已有蓝牙连接正在进行");
+
+  connectionAttemptInProgress = true;
+  stopAutoSearch();
+  try {
+    setState("warn", `正在连接 ${device.name}...`);
+    if (bleDevice && bleDevice !== device) {
+      bleDevice.removeEventListener("gattserverdisconnected", onDisconnected);
+    }
+    bleDevice = device;
+    bleDevice.removeEventListener("gattserverdisconnected", onDisconnected);
     bleDevice.addEventListener("gattserverdisconnected", onDisconnected);
     gattServer = await bleDevice.gatt.connect();
 
@@ -185,15 +274,19 @@ async function connectBle() {
     dom.notifyState.textContent = "on";
     dom.sessionTime.textContent = fmtNow();
     setState("ok", "已连接");
+    stopAutoSearch();
   } catch (err) {
-    imuVitals.reset("蓝牙连接失败");
-    console.error(err);
-    setState("danger", "连接失败");
-    alert(err.message || String(err));
+    notifyChar = null;
+    writeChar = null;
+    gattServer = null;
+    throw err;
+  } finally {
+    connectionAttemptInProgress = false;
   }
 }
 
-function onDisconnected() {
+function onDisconnected(event) {
+  if (event && event.target && bleDevice && event.target !== bleDevice) return;
   imuVitals.reset("蓝牙已断开");
   dom.notifyState.textContent = "off";
   setState("warn", "已断开");
@@ -214,6 +307,7 @@ function onDisconnected() {
   renderFrames();
   clearWaveCharts();
   if (isRecording) stopRecord();
+  scheduleAutoSearch();
 }
 
 function toggleRecord() {
@@ -311,8 +405,14 @@ function stopRecord() {
 }
 
 async function disconnectBle() {
+  autoConnectEnabled = false;
+  stopAutoSearch();
   try {
-    if (bleDevice && bleDevice.gatt && bleDevice.gatt.connected) bleDevice.gatt.disconnect();
+    if (bleDevice && bleDevice.gatt && bleDevice.gatt.connected) {
+      bleDevice.gatt.disconnect();
+    } else {
+      onDisconnected();
+    }
   } catch (err) {
     console.error(err);
   }
@@ -897,3 +997,4 @@ setState("warn", "未连接");
 dom.notifyState.textContent = "off";
 initWaveCharts();
 window.setTimeout(renderDisplayFrame, DISPLAY_INTERVAL_MS);
+scheduleAutoSearch(0);
