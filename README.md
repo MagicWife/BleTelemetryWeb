@@ -1,3 +1,7 @@
+## Petvewi FW17 / 31维特征 / OTA 新入口
+
+Petvewi FW17请使用 [FW17调试台](./fw17/)，支持协议v7、31维特征、CSV/HEX记录及新分区OTA。[使用说明](./fw17/README.md)。现有CityU/v2首页继续保留。
+
 online web: https://github.com/MagicWife/BleTelemetryWeb/
 
 # BLE Telemetry Aircraft HUD
